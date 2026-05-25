@@ -154,3 +154,46 @@ def test_generated_column_cannot_drift(conn, sample_run: RunRecord):
     ).fetchall()
     for blob_key, col_key in rows:
         assert blob_key == col_key
+
+
+class _FailOnPageInsertConnection(sqlite3.Connection):
+    """A Connection whose page_results bulk insert always raises.
+
+    sqlite3.Connection methods are read-only C attributes (cannot be
+    monkeypatched), so we subclass to inject a mid-write failure: the ``runs``
+    insert succeeds, then ``executemany`` (the page_results bulk insert) raises,
+    exercising the rollback path of write_run's explicit transaction.
+    """
+
+    def executemany(self, *args, **kwargs):
+        raise sqlite3.OperationalError("simulated mid-write failure")
+
+
+def test_write_run_is_atomic_on_failure(sample_run: RunRecord):
+    """A mid-write failure rolls back — no partial run is ever persisted (CR-01).
+
+    write_run wraps its inserts in an explicit transaction. If the page_results
+    insert raises after the runs row was inserted, the whole transaction must
+    roll back so a subsequent commit() on the shared connection cannot flush a
+    partial run to disk.
+    """
+    conn = sqlite3.connect(":memory:", factory=_FailOnPageInsertConnection)
+    try:
+        init_db(conn)
+        with pytest.raises(sqlite3.OperationalError):
+            write_run(conn, sample_run)
+
+        # Force a commit: if the failed write had left an open transaction with a
+        # partial run, this commit would flush it to the table.
+        conn.commit()
+
+        runs = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE id = ?", (str(sample_run.id),)
+        ).fetchone()[0]
+        pages = conn.execute(
+            "SELECT COUNT(*) FROM page_results WHERE run_id = ?", (str(sample_run.id),)
+        ).fetchone()[0]
+        assert runs == 0, "the runs row must have rolled back (no partial run)"
+        assert pages == 0, "no page_results rows may survive a rolled-back write"
+    finally:
+        conn.close()
