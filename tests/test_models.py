@@ -16,7 +16,11 @@ These pin the observable model contract every downstream phase targets:
   - the ``DirectionStatus`` enum has all six members for Plan 03 (D-11).
 """
 
+import math
 from datetime import UTC, datetime
+
+import pytest
+from pydantic import ValidationError
 
 from perfcrawl.models import (
     SCHEMA_VERSION,
@@ -118,6 +122,36 @@ def test_metric_sample():
     again = MetricSample.model_validate_json(s.model_dump_json())
     assert again.median == 2.5
     assert again.samples == [1.0, 2.5, 4.0]
+
+
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan])
+def test_metric_sample_rejects_non_finite_median(bad):
+    """inf/nan medians are rejected, not silently nulled on round-trip (WR-01)."""
+    with pytest.raises(ValidationError):
+        MetricSample(median=bad)
+
+
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan])
+def test_metric_sample_rejects_non_finite_sample(bad):
+    """A non-finite value anywhere in samples[] is rejected (WR-01)."""
+    with pytest.raises(ValidationError):
+        MetricSample(samples=[1.0, bad, 2.0])
+
+
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan])
+def test_page_result_rejects_non_finite_scalar_float(bad):
+    """PageResult scalar float metrics reject inf/nan too (WR-01).
+
+    Pydantic JSON mode would serialize these to null, breaking the byte-identical
+    round-trip (criterion #1); reject them at the model layer so corruption fails
+    loud instead of being silently swallowed by the persistence layer.
+    """
+    with pytest.raises(ValidationError):
+        PageResult(url="https://x.com/", url_key="https://x.com/", perf_score=bad)
+    with pytest.raises(ValidationError):
+        PageResult(
+            url="https://x.com/", url_key="https://x.com/", slowest_request_ms=bad
+        )
 
 
 def test_analysis_result_nullable():
