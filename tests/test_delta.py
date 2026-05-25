@@ -20,7 +20,11 @@ The two-run ``delta_pair`` fixture (conftest.py, returns ``(previous, current)``
 is built to exercise every one of these cases in one place.
 """
 
-from perfcrawl.delta import RunDelta, compute_deltas
+import math
+
+import pytest
+
+from perfcrawl.delta import RunDelta, compute_deltas, safe_pct
 from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
 
 
@@ -117,6 +121,36 @@ def test_deltapct_normal_case_computes():
     d = idx[("https://t/p", "perf_score")]
     assert d.delta_abs == 0.25
     assert d.delta_pct == 50.0  # (0.75 - 0.50) / 0.50 * 100
+
+
+@pytest.mark.parametrize(
+    "current,previous",
+    [
+        (math.inf, 5.0),  # non-finite current -> result inf
+        (5.0, math.inf),  # non-finite previous -> result nan/inf
+        (math.nan, 5.0),  # nan current -> nan result
+        (5.0, math.nan),  # nan previous -> nan result
+    ],
+)
+def test_safe_pct_never_returns_non_finite(current, previous):
+    """safe_pct returns None for any non-finite input/result (WR-02, D-10).
+
+    The docstring promised 'no inf/NaN'; the second-line-of-defense guard must
+    honor it even if a non-finite value reaches the function (WR-01 blocks the
+    model path; this covers direct callers).
+    """
+    result = safe_pct(current, previous)
+    assert result is None
+
+
+def test_safe_pct_finite_case_unchanged():
+    """A normal finite computation is unaffected by the non-finite guard."""
+    assert safe_pct(0.75, 0.50) == 50.0
+    assert safe_pct(2.0, 4.0) == -50.0
+    # zero/None baseline still short-circuits to None
+    assert safe_pct(5.0, 0) is None
+    assert safe_pct(5.0, None) is None
+    assert safe_pct(None, 5.0) is None
 
 
 # --- D-11: status-enum edge cases (new / removed / not_comparable) -----------

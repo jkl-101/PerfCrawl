@@ -30,6 +30,8 @@ Design invariants:
     comparable metrics actually present on at least one side (Open Q2).
 """
 
+from math import isfinite
+
 from pydantic import BaseModel
 
 from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
@@ -116,11 +118,15 @@ def safe_pct(current: float | None, previous: float | None) -> float | None:
 
     Returns ``None`` when ``previous`` is ``0`` or ``None`` (no inf/NaN/
     ZeroDivisionError) or when ``current`` is ``None``; otherwise the signed
-    percentage ``(current - previous) / previous * 100``.
+    percentage ``(current - previous) / previous * 100`` — but only if that result
+    is finite. A non-finite input or a result that overflows to ``inf``/``nan``
+    also yields ``None`` (WR-01's model layer is the first line of defense; this is
+    the second), honoring the documented "never inf/NaN" contract (D-10).
     """
     if previous in (None, 0) or current is None:
         return None
-    return (current - previous) / previous * 100.0
+    pct = (current - previous) / previous * 100.0
+    return pct if isfinite(pct) else None
 
 
 def _safe_abs(current: float | None, previous: float | None) -> float | None:
