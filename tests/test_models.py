@@ -176,6 +176,26 @@ def test_direction_status_enum():
     }
 
 
+def test_started_at_must_be_tz_aware():
+    """A naive started_at is rejected; tz-aware values pass (WR-04, D-17).
+
+    Cross-run ordering depends on an unambiguous timestamp; a naive datetime
+    would store an offset-less ISO string and make 'previous run' selection
+    ambiguous across DST/timezone boundaries.
+    """
+    # naive datetime -> rejected at the model layer
+    with pytest.raises(ValidationError):
+        RunRecord(started_at=datetime(2026, 5, 25, 12, 0, 0), target="x")
+    # naive ISO string (no offset) -> also rejected
+    with pytest.raises(ValidationError):
+        RunRecord(started_at="2026-05-25T12:00:00", target="x")
+    # tz-aware values are accepted and preserve their offset
+    aware = RunRecord(started_at=datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC), target="x")
+    assert aware.started_at.tzinfo is not None
+    aware_z = RunRecord(started_at="2026-05-25T12:00:00Z", target="x")
+    assert aware_z.started_at.tzinfo is not None
+
+
 def test_run_record_metadata():
     """RunRecord carries the D-17 metadata; id auto-generates, env slot nullable."""
     run = RunRecord(started_at=datetime(2026, 1, 1, tzinfo=UTC), target="studyhalo.com")
