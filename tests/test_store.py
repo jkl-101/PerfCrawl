@@ -156,6 +156,37 @@ def test_generated_column_cannot_drift(conn, sample_run: RunRecord):
         assert blob_key == col_key
 
 
+def test_write_run_reasserts_foreign_keys(sample_run: RunRecord, tmp_path):
+    """write_run re-asserts PRAGMA foreign_keys on its connection (WR-05).
+
+    foreign_keys is per-connection state, not stored in the DB. A caller who
+    initialises the DB once and then opens a NEW connection to write gets
+    foreign_keys=OFF by default. write_run must turn it back ON so orphan
+    page_results rows are rejected, not silently accepted.
+    """
+    db = tmp_path / "perfcrawl.db"
+    # Initialise the schema on one connection, then throw it away.
+    init_conn = sqlite3.connect(db)
+    init_db(init_conn)
+    init_conn.close()
+
+    # A brand-new connection: foreign_keys defaults to OFF here.
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+        write_run(conn, sample_run)
+        # write_run must have turned FK enforcement back ON on this connection.
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        # And the constraint is actually live: an orphan page row is rejected.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO page_results (run_id, record_json) VALUES (?, ?)",
+                ("no-such-run-id", '{"url":"x","url_key":"x"}'),
+            )
+    finally:
+        conn.close()
+
+
 class _FailOnPageInsertConnection(sqlite3.Connection):
     """A Connection whose page_results bulk insert always raises.
 
