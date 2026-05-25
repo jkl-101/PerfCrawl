@@ -26,7 +26,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Bump ONLY on an additive change; never remove or rename a field (D-06).
 # Persisted on every RunRecord so old-schema runs stay comparable (criterion #3).
@@ -190,3 +190,19 @@ class RunRecord(BaseModel):
     emulation: str | None = None
 
     pages: list[PageResult] = Field(default_factory=list)
+
+    @field_validator("started_at")
+    @classmethod
+    def _tz_aware(cls, v: datetime) -> datetime:
+        """Enforce the D-17 tz-aware contract on ``started_at`` (WR-04).
+
+        Nothing previously enforced tz-awareness despite the documented "tz-aware
+        ISO-8601 timestamp" contract, so a naive datetime round-tripped and stored
+        an offset-less ISO string. Cross-run regression ("get the previous run for
+        URL X") orders runs by this timestamp; naive timestamps make ordering
+        ambiguous across DST/timezone boundaries and can mis-select the previous
+        run. Reject naive datetimes at the model layer so this stays correct.
+        """
+        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
+            raise ValueError("started_at must be timezone-aware (D-17)")
+        return v
