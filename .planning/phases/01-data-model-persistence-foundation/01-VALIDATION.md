@@ -1,7 +1,7 @@
 ---
 phase: 1
 slug: data-model-persistence-foundation
-status: draft
+status: planned
 nyquist_compliant: false
 wave_0_complete: false
 created: 2026-05-25
@@ -39,25 +39,23 @@ created: 2026-05-25
 
 ## Per-Task Verification Map
 
-> Task IDs are assigned by the planner. Until plans exist, this is the
-> requirement/criterion → test mapping the plans must satisfy. After planning,
-> bind each row to its Task ID.
+> Task IDs are bound to plans below (format: PLAN.TASK). Plans 01-03 created 2026-05-25.
 
-| Criterion / Req | Behavior | Test Type | Automated Command | File Exists | Status |
-|-----------------|----------|-----------|-------------------|-------------|--------|
-| #1 / HIST-01 | Write run → read back identical (model equality) | unit | `pytest tests/test_store.py::test_round_trip_identity -x` | ❌ W0 | ⬜ pending |
-| #1 | Exact bytes preserved in `record_json` TEXT column | unit | `pytest tests/test_store.py::test_record_json_bytes_preserved -x` | ❌ W0 | ⬜ pending |
-| #2 | Polarity-driven direction (lower vs higher is better) | unit | `pytest tests/test_delta.py::test_direction_by_polarity -x` | ❌ W0 | ⬜ pending |
-| #2 / D-10 | `deltaPct` is None when previous==0 (no inf/NaN) | unit | `pytest tests/test_delta.py::test_deltapct_zero_guard -x` | ❌ W0 | ⬜ pending |
-| #2 / D-11 | new / removed / not_comparable emitted (removed never dropped) | unit | `pytest tests/test_delta.py::test_edge_status_enum -x` | ❌ W0 | ⬜ pending |
-| #2 / D-12 | `unchanged` == literal equality (no noise band) | unit | `pytest tests/test_delta.py::test_unchanged_is_literal -x` | ❌ W0 | ⬜ pending |
-| #3 / D-06,D-08 | Old-schema blob loads under newer model (missing → None) | unit | `pytest tests/test_store.py::test_old_schema_loads -x` | ❌ W0 | ⬜ pending |
-| #3 | `schema_version` defaults correctly + persists | unit | `pytest tests/test_models.py::test_schema_version_default -x` | ❌ W0 | ⬜ pending |
-| #4 / D-02..D-05 | tracking params dropped, query sorted, trailing slash stripped, fragment dropped, %-case normalized | unit | `pytest tests/test_canonical.py -x` | ❌ W0 | ⬜ pending |
-| #4 | same logical page → same key across run variants (self-join works) | unit | `pytest tests/test_canonical.py::test_variants_collapse -x` | ❌ W0 | ⬜ pending |
-| #4 / D-03,D-04 | distinct pages NOT over-merged (`?page=2`≠`?page=3`, www≠apex) | unit | `pytest tests/test_canonical.py::test_no_over_merge -x` | ❌ W0 | ⬜ pending |
-| D-07 | promote a metric via VIRTUAL generated column (STORED ALTER rejected) | unit | `pytest tests/test_store.py::test_promote_column_virtual -x` | ❌ W0 | ⬜ pending |
-| D-15 | bare `inp` field rejected; only labeled TBT proxy allowed | unit | `pytest tests/test_models.py::test_inp_proxy_naming -x` | ❌ W0 | ⬜ pending |
+| Criterion / Req | Task ID | Behavior | Automated Command | Status |
+|-----------------|---------|----------|-------------------|--------|
+| #4 / D-02..D-05 | 01.3 | tracking params dropped, query sorted, trailing slash stripped, fragment dropped, %-case normalized | `pytest tests/test_canonical.py -x` | ⬜ pending |
+| #4 | 01.3 | same logical page → same key across run variants (self-join works) | `pytest tests/test_canonical.py::test_variants_collapse -x` | ⬜ pending |
+| #4 / D-03,D-04 | 01.3 | distinct pages NOT over-merged (`?page=2`≠`?page=3`, www≠apex) | `pytest tests/test_canonical.py::test_no_over_merge -x` | ⬜ pending |
+| #3 | 02.1 | `schema_version` defaults correctly + persists | `pytest tests/test_models.py::test_schema_version_default -x` | ⬜ pending |
+| D-15 | 02.1 | bare `inp` field rejected; only labeled TBT proxy allowed | `pytest tests/test_models.py::test_inp_proxy_naming -x` | ⬜ pending |
+| #1 / HIST-01 | 02.2 | Write run → read back identical (model equality) | `pytest tests/test_store.py::test_round_trip_identity -x` | ⬜ pending |
+| #1 | 02.2 | Exact bytes preserved in `record_json` TEXT column | `pytest tests/test_store.py::test_record_json_bytes_preserved -x` | ⬜ pending |
+| #3 / D-06,D-08 | 02.2 | Old-schema blob loads under newer model (missing → None) | `pytest tests/test_store.py::test_old_schema_loads -x` | ⬜ pending |
+| D-07 | 02.2 | promote a metric via VIRTUAL generated column (STORED ALTER rejected) | `pytest tests/test_store.py::test_promote_column_virtual -x` | ⬜ pending |
+| #2 | 03.1 | Polarity-driven direction (lower vs higher is better) | `pytest tests/test_delta.py::test_direction_by_polarity -x` | ⬜ pending |
+| #2 / D-10 | 03.1 | `deltaPct` is None when previous==0 (no inf/NaN) | `pytest tests/test_delta.py::test_deltapct_zero_guard -x` | ⬜ pending |
+| #2 / D-11 | 03.1 | new / removed / not_comparable emitted (removed never dropped) | `pytest tests/test_delta.py::test_edge_status_enum -x` | ⬜ pending |
+| #2 / D-12 | 03.1 | `unchanged` == literal equality (no noise band) | `pytest tests/test_delta.py::test_unchanged_is_literal -x` | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

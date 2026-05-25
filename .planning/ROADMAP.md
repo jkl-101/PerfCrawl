@@ -31,7 +31,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Given two stored runs for the same site, RunDelta records (current/previous/deltaAbs/deltaPct/direction) can be computed per page per metric against fixture data
   3. The PageResult/RunRecord model carries a schemaVersion so runs stored under an older schema remain comparable after fields are added
   4. Page identity uses a canonical, normalized URL key so the same page matches across runs
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Scaffold uv project + registry tables + canonical URL key slice (criterion #4)
+- [ ] 01-02-PLAN.md — Canonical record model + hybrid SQLite store: round-trip + old-schema load (criteria #1, #3, HIST-01)
+- [ ] 01-03-PLAN.md — Polarity-driven RunDelta engine on fixtures (criterion #2)
 
 ### Phase 2: Single-Page Measurement Slice
 **Goal**: Running `perfcrawl measure <url>` audits a single URL end-to-end — captures all frontend metrics, normalizes to PageResult, persists the run, and emits CSV/JSON plus raw Lighthouse artifacts — proving the Python-orchestrator / Node-Lighthouse-over-CDP seam and median-of-N before any crawling exists.
@@ -102,7 +106,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Model & Persistence Foundation | 0/TBD | Not started | - |
+| 1. Data Model & Persistence Foundation | 0/3 | Not started | - |
 | 2. Single-Page Measurement Slice | 0/TBD | Not started | - |
 | 3. Site-Wide Crawler | 0/TBD | Not started | - |
 | 4. Authenticated Crawling | 0/TBD | Not started | - |
