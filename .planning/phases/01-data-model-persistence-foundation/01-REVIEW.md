@@ -21,7 +21,15 @@ findings:
   warning: 2
   info: 4
   total: 6
-status: issues_found
+status: fixed
+fixed: 2026-05-25T13:45:00Z
+fixed_findings: 6   # WR-01, WR-02, IN-01..IN-04 (all findings — --fix --all)
+remaining_findings: 0
+fix_commits:
+  - 0f8f9cd  # WR-01 + IN-01 finite-guard delta_abs + RunDelta config
+  - 3b0fd3d  # WR-02 reject duplicate url_key in write_run
+  - ff3a3a1  # IN-02 + IN-04 url_key path-traversal + IPv6 port-anchor docs
+  - 096bc0f  # IN-03 corrected fixture comment + page_results note
 ---
 
 # Phase 1: Code Review Report
@@ -29,7 +37,7 @@ status: issues_found
 **Reviewed:** 2026-05-25T00:00:00Z
 **Depth:** standard
 **Files Reviewed:** 12
-**Status:** issues_found
+**Status:** fixed — all 6 findings (2 warning + 4 info) resolved (67 tests pass, ruff clean)
 
 ## Summary
 
