@@ -20,8 +20,8 @@ The two-run ``delta_pair`` fixture (conftest.py, returns ``(previous, current)``
 is built to exercise every one of these cases in one place.
 """
 
-from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
 from perfcrawl.delta import RunDelta, compute_deltas
+from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
 
 
 def _by_key_metric(deltas: list[RunDelta]) -> dict[tuple[str, str], RunDelta]:
@@ -93,7 +93,7 @@ def test_direction_by_polarity(delta_pair):
 
 
 def test_deltapct_zero_guard(delta_pair):
-    """previous == 0 => delta_pct is None (no inf/NaN/ZeroDivisionError); delta_abs still computed (D-10)."""
+    """previous == 0 => delta_pct is None (no inf/NaN); delta_abs still computed (D-10)."""
     previous, current = delta_pair
     deltas = compute_deltas(current, previous)
     idx = _by_key_metric(deltas)
@@ -106,7 +106,7 @@ def test_deltapct_zero_guard(delta_pair):
 
 
 def test_deltapct_normal_case_computes():
-    """When previous is a non-zero number, delta_pct is the real percentage (proves the guard isn't blanket)."""
+    """Non-zero previous => delta_pct is the real percentage (the guard isn't blanket)."""
     prev = _one_page_run(
         PageResult(url="https://t/p", url_key="https://t/p", perf_score=0.50)
     )
@@ -123,7 +123,11 @@ def test_deltapct_normal_case_computes():
 
 
 def test_edge_status_enum(delta_pair):
-    """new (current-only page), removed (previous-only page, EMITTED), not_comparable (metric one-sided) — D-11."""
+    """Edge cases (D-11): new (current-only page), removed (previous-only, EMITTED), not_comparable.
+
+    A whole page in only one run => new/removed; a metric on only one side of a
+    both-runs page => not_comparable; removed pages are emitted, never dropped.
+    """
     previous, current = delta_pair
     deltas = compute_deltas(current, previous)
     idx = _by_key_metric(deltas)
@@ -186,7 +190,7 @@ def test_unchanged_is_literal(delta_pair):
 
 
 def test_flat_list_shape(delta_pair):
-    """compute_deltas returns a flat list[RunDelta] keyed by (url_key, metric) over both unions (Open Q2)."""
+    """compute_deltas => flat list[RunDelta] keyed by (url_key, metric), both unions (Open Q2)."""
     previous, current = delta_pair
     deltas = compute_deltas(current, previous)
 
