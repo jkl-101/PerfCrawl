@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-05-25T12:38:34.687Z"
+stopped_at: Completed 01-02-PLAN.md (model + store)
+last_updated: "2026-05-25T12:45:18.930Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-25)
 ## Current Position
 
 Phase: 01 (data-model-persistence-foundation) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-05-25
 
-Progress: [███░░░░░░░] 33%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [███░░░░░░░] 33%
 
 *Updated after each plan completion*
 | Phase 01 P01 | 2 | 3 tasks | 10 files |
+| Phase 01 P02 | 3 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Recent decisions affecting current work:
 - Sequencing (research): Median-of-N (`--samples N`) ships in Phase 2, before regression flagging in Phase 6, so trend data is trustworthy.
 - [Phase ?]: w3lib supply-chain gate (T-01-SC) APPROVED by human; w3lib>=2.3,<3 added as runtime canonicalization dep (not stdlib fallback).
 - [Phase ?]: Phase 1 is library-only: removed uv-generated CLI entry-point stub; no Typer/CLI until Phase 2.
+- [Phase ?]: [Phase 1 / Plan 02]: Round-trip identity (A3) implemented as BOTH model equality AND exact-byte preservation (record_json TEXT) so criterion #1 holds under either interpretation.
+- [Phase ?]: [Phase 1 / Plan 02]: STORED-via-ALTER (D-07/Pitfall 2) only raises on a NON-EMPTY table on SQLite 3.50.4; VIRTUAL is the supported promote-a-metric path.
+- [Phase ?]: [Phase 1 / Plan 02]: WaterfallEntry modeled as a typed submodel (not list[dict]) with extra=ignore for forward-compat (METRIC-03).
 
 ### Pending Todos
 
@@ -91,6 +95,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-25T12:38:22.178Z
-Stopped at: Phase 1 context gathered
+Last session: 2026-05-25T12:45:18.926Z
+Stopped at: Completed 01-02-PLAN.md (model + store)
 Resume file: None

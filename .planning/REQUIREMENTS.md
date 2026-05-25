@@ -45,7 +45,7 @@ Requirements for the initial release — a full frontend audit (crawl + metrics 
 
 ### Persistence & Regression
 
-- [ ] **HIST-01**: Tool persists every run (run id, timestamp, per-page results) to a local store
+- [x] **HIST-01**: Tool persists every run (run id, timestamp, per-page results) to a local store
 - [ ] **HIST-02**: Tool compares the current run against the previous run per page per metric and flags regressions/improvements beyond a noise band
 
 ### Output
@@ -103,7 +103,7 @@ Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase detail.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| HIST-01 | Phase 1 — Data Model & Persistence Foundation | Pending |
+| HIST-01 | Phase 1 — Data Model & Persistence Foundation | Complete |
 | METRIC-01 | Phase 2 — Single-Page Measurement Slice | Pending |
 | METRIC-02 | Phase 2 — Single-Page Measurement Slice | Pending |
 | METRIC-03 | Phase 2 — Single-Page Measurement Slice | Pending |

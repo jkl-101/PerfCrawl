@@ -43,7 +43,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Canonical record model + hybrid SQLite store: round-trip + old-schema load (criteria #1, #3, HIST-01)
+- [x] 01-02-PLAN.md — Canonical record model + hybrid SQLite store: round-trip + old-schema load (criteria #1, #3, HIST-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Model & Persistence Foundation | 1/3 | In Progress|  |
+| 1. Data Model & Persistence Foundation | 2/3 | In Progress|  |
 | 2. Single-Page Measurement Slice | 0/TBD | Not started | - |
 | 3. Site-Wide Crawler | 0/TBD | Not started | - |
 | 4. Authenticated Crawling | 0/TBD | Not started | - |
