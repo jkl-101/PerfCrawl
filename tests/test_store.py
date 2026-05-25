@@ -199,6 +199,58 @@ def test_write_run_does_not_mutate_caller(conn):
     assert loaded.pages[1].url_key == "https://x.com/b"
 
 
+def test_write_run_rejects_duplicate_url_key(conn):
+    """Two pages with the same url_key in one run raise ValueError (WR-02).
+
+    url_key is the per-run canonical page identity (one page per key per run). A
+    reader that buckets a run's pages by url_key (e.g. compute_deltas) keeps only
+    the last duplicate, silently dropping the rest. write_run enforces the
+    uniqueness invariant at write time so the contract holds for every reader.
+    """
+    from datetime import UTC, datetime
+
+    from perfcrawl.models import PageResult
+
+    run = RunRecord(
+        started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        target="https://x.com",
+        pages=[
+            PageResult(url="https://x.com/?a=1", url_key="https://x.com/?a=1"),
+            # Same canonical key as above (a fragment never identifies a distinct
+            # resource), so both pages collide on one cross-run identity.
+            PageResult(url="https://x.com/?a=1#frag", url_key="https://x.com/?a=1"),
+        ],
+    )
+    with pytest.raises(ValueError, match="duplicate url_key"):
+        write_run(conn, run)
+    # Rejected before any insert: nothing was persisted for this run.
+    persisted = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE id = ?", (str(run.id),)
+    ).fetchone()[0]
+    assert persisted == 0
+
+
+def test_write_run_rejects_duplicate_after_key_derivation(conn):
+    """Duplicate detection runs AFTER key derivation: two blank keys on the same
+    canonical URL collide once derived, and must still be rejected (WR-02)."""
+    from datetime import UTC, datetime
+
+    from perfcrawl.models import PageResult
+
+    run = RunRecord(
+        started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        target="https://x.com",
+        pages=[
+            # Both have blank url_key; both derive to the same canonical key, so
+            # the post-derivation duplicate check (not just a raw-key check) fires.
+            PageResult(url="https://Example.com/Path/?utm_source=x&a=1", url_key=""),
+            PageResult(url="https://example.com/Path?a=1#frag", url_key="   "),
+        ],
+    )
+    with pytest.raises(ValueError, match="duplicate url_key"):
+        write_run(conn, run)
+
+
 def test_generated_column_cannot_drift(conn, sample_run: RunRecord):
     """The generated url_key column is computed FROM the blob, so it cannot disagree."""
     write_run(conn, sample_run)
