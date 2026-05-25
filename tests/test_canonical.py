@@ -107,6 +107,26 @@ def test_malformed_input_does_not_raise(bad):
     assert canonical_key(bad) == result
 
 
+@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n  \t"])
+def test_empty_or_blank_input_returns_empty_sentinel(blank):
+    """Empty/whitespace input returns the "" sentinel (WR-03)."""
+    assert canonical_key(blank) == ""
+
+
+def test_blank_input_does_not_collide_with_root_key():
+    """Blank input must NOT collapse onto the real root key (WR-03).
+
+    Previously empty/whitespace normalized to a "/" path, colliding every
+    blank/empty-normalizing input onto a single key and over-merging distinct
+    broken pages. The empty-string sentinel must differ from any real key.
+    """
+    root = canonical_key("https://x.com/")
+    assert canonical_key("") != root
+    assert canonical_key("   ") != root
+    # the two real spellings of a root still agree (no regression)
+    assert root == "https://x.com/"
+
+
 def test_idempotent():
     """Canonicalizing an already-canonical key is a no-op (stable self-join key)."""
     once = canonical_key("https://Example.com/Path/?utm_source=x&b=2&a=1#frag")
