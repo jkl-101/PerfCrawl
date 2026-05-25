@@ -21,7 +21,18 @@ findings:
   warning: 7
   info: 4
   total: 12
-status: issues_found
+status: fixed
+fixed: 2026-05-25T13:20:00Z
+fixed_findings: 8   # CR-01 + WR-01..WR-07 (all critical + warning), each with a regression test
+remaining_findings: 4   # IN-01..IN-04 (info) — intentionally out of --fix scope
+fix_commits:
+  - 2d7a414  # CR-01 explicit transaction
+  - f8fd0d1  # WR-05 FK pragma re-assert
+  - 96581dd  # WR-06/WR-07 url_key on copy + blank strip-check
+  - dcab685  # WR-01 reject non-finite floats
+  - 9261a44  # WR-02 safe_pct no-inf/NaN contract
+  - 6aa50a8  # WR-04 tz-aware started_at
+  - 1c6628c  # WR-03 non-colliding empty-key sentinel
 ---
 
 # Phase 1: Code Review Report
@@ -29,7 +40,7 @@ status: issues_found
 **Reviewed:** 2026-05-25T12:54:06Z
 **Depth:** standard
 **Files Reviewed:** 12
-**Status:** issues_found
+**Status:** fixed — 8/8 critical+warning findings resolved (63 tests pass, ruff clean); 4 info findings deferred (out of --fix scope)
 
 ## Summary
 
