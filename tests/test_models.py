@@ -16,7 +16,7 @@ These pin the observable model contract every downstream phase targets:
   - the ``DirectionStatus`` enum has all six members for Plan 03 (D-11).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from perfcrawl.models import (
     SCHEMA_VERSION,
@@ -30,7 +30,7 @@ from perfcrawl.models import (
 
 def test_schema_version_default():
     """RunRecord.schema_version defaults to SCHEMA_VERSION and persists round-trip (D-06)."""
-    run = RunRecord(started_at=datetime(2026, 1, 1, tzinfo=timezone.utc), target="x")
+    run = RunRecord(started_at=datetime(2026, 1, 1, tzinfo=UTC), target="x")
     assert run.schema_version == SCHEMA_VERSION
     # persists through a JSON round-trip (the store-layer mechanism)
     reloaded = RunRecord.model_validate_json(run.model_dump_json())
@@ -144,7 +144,7 @@ def test_direction_status_enum():
 
 def test_run_record_metadata():
     """RunRecord carries the D-17 metadata; id auto-generates, env slot nullable."""
-    run = RunRecord(started_at=datetime(2026, 1, 1, tzinfo=timezone.utc), target="studyhalo.com")
+    run = RunRecord(started_at=datetime(2026, 1, 1, tzinfo=UTC), target="studyhalo.com")
     assert run.id is not None  # auto-generated UUID
     assert run.target == "studyhalo.com"
     assert run.auth_used is None  # Phase 4

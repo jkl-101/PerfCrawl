@@ -1,0 +1,67 @@
+{
+  "id": "3f1c2b9a-0000-4000-8000-0000000000a1",
+  "started_at": "2026-05-25T10:00:00+00:00",
+  "target": "https://studyhalo.com",
+  "schema_version": 1,
+  "auth_used": false,
+  "chrome_version": "137.0.7151.40",
+  "lighthouse_version": "13.3.0",
+  "throttling": {"rttMs": 150, "throughputKbps": 1638.4, "cpuSlowdownMultiplier": 4},
+  "emulation": "mobile",
+  "pages": [
+    {
+      "url": "https://studyhalo.com/",
+      "url_key": "https://studyhalo.com/",
+      "perf_score": 0.82,
+      "a11y_score": 0.95,
+      "seo_score": 0.91,
+      "best_practices_score": 0.93,
+      "lcp_ms": {"median": 2410.0, "samples": [2300.0, 2410.0, 2520.0]},
+      "cls": {"median": 0.04, "samples": [0.03, 0.04, 0.05]},
+      "inp_proxy_tbt_ms": {"median": 180.0, "samples": [160.0, 180.0, 210.0]},
+      "ttfb_ms": {"median": 320.0, "samples": [300.0, 320.0, 360.0]},
+      "request_count": 48,
+      "total_bytes": 1843200,
+      "status_code": 200,
+      "slowest_request_url": "https://studyhalo.com/static/app.bundle.js",
+      "slowest_request_ms": 612.0,
+      "waterfall": [
+        {"url": "https://studyhalo.com/", "resource_type": "document", "size_bytes": 18211, "timing_ms": 320.0, "status_code": 200},
+        {"url": "https://studyhalo.com/static/app.bundle.js", "resource_type": "script", "size_bytes": 524288, "timing_ms": 612.0, "status_code": 200}
+      ],
+      "diagnostics": {"unused_js_bytes": 102400, "render_blocking_resources": 2},
+      "analysis": {
+        "observation": "LCP is dominated by the main JS bundle blocking first paint.",
+        "potential_cause": "app.bundle.js is render-blocking and 512KB unminified-ish.",
+        "suggested_optimization": "Code-split the bundle and defer non-critical script."
+      }
+    },
+    {
+      "url": "https://studyhalo.com/courses?page=2",
+      "url_key": "https://studyhalo.com/courses?page=2",
+      "perf_score": 0.74,
+      "a11y_score": 0.92,
+      "seo_score": 0.88,
+      "best_practices_score": 0.9,
+      "lcp_ms": {"median": 3120.0, "samples": [3000.0, 3120.0, 3300.0]},
+      "cls": {"median": 0.11, "samples": [0.09, 0.11, 0.13]},
+      "inp_proxy_tbt_ms": {"median": 340.0, "samples": [310.0, 340.0, 390.0]},
+      "ttfb_ms": {"median": 480.0, "samples": [450.0, 480.0, 520.0]},
+      "request_count": 71,
+      "total_bytes": 2621440,
+      "status_code": 200,
+      "slowest_request_url": "https://studyhalo.com/api/courses",
+      "slowest_request_ms": 905.0,
+      "waterfall": [
+        {"url": "https://studyhalo.com/courses?page=2", "resource_type": "document", "size_bytes": 24010, "timing_ms": 480.0, "status_code": 200},
+        {"url": "https://studyhalo.com/api/courses", "resource_type": "xhr", "size_bytes": 81920, "timing_ms": 905.0, "status_code": 200}
+      ],
+      "diagnostics": {"unused_js_bytes": 204800, "render_blocking_resources": 3},
+      "analysis": {
+        "observation": "The course-list API call is the slowest request and inflates TBT.",
+        "potential_cause": "Unpaginated server query and a large JSON payload.",
+        "suggested_optimization": "Cache the API response and trim unused fields."
+      }
+    }
+  ]
+}
