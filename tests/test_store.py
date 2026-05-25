@@ -104,7 +104,8 @@ def test_promoted_virtual_column_is_queryable(conn, sample_run: RunRecord):
         (str(sample_run.id),),
     ).fetchall()
     medians = [r[0] for r in rows]
-    # one page has lcp median 2410, the other 3120; the third (none) sorts first as NULL
+    # sample_run has two pages: one lcp median 2410, the other 3120 (IN-03 — the
+    # earlier "third (none)" note was wrong; this fixture has no third page).
     assert 2410.0 in medians
     assert 3120.0 in medians
 

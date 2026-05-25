@@ -7,6 +7,12 @@ while the metrics that get queried/self-joined are exposed as **generated
 columns** computed *from* that blob via ``json_extract`` — so a promoted column
 can never drift from the source record.
 
+Note: ``page_results`` is the intended cross-run self-join / promotion query
+surface for LATER phases (D-07). In Phase 1 it is write-only — ``read_run``
+reconstructs a ``RunRecord`` solely from ``runs.record_json`` — so the table is
+populated on write but not yet queried by name through the store API. It is
+correct forward design, not dead code (IN-03).
+
 Why TEXT, not JSONB: JSONB re-serializes to SQLite's canonical binary form and
 would not preserve the input bytes, breaking the round-trip-identity guarantee
 (criterion #1, Pitfall 1). ``record_json`` is therefore RAW TEXT.
