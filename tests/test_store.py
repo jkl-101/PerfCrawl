@@ -68,8 +68,16 @@ def test_old_schema_loads(conn, run_v1_old_schema_json: str):
     assert loaded == old_run
 
 
-def test_promote_column_virtual(conn):
-    """Promote a metric via a VIRTUAL generated column; STORED-via-ALTER raises (D-07)."""
+def test_promote_column_virtual(conn, sample_run: RunRecord):
+    """Promote a metric via a VIRTUAL generated column; STORED-via-ALTER raises (D-07).
+
+    The "promote later" path always runs against a table that already holds rows
+    (you promote a metric AFTER runs exist), so a row is written first — that is
+    precisely when SQLite enforces the restriction: it cannot backfill an existing
+    row for a STORED column. (On an empty table the STORED ALTER would no-op, which
+    is not the real-world case D-07 cares about.)
+    """
+    write_run(conn, sample_run)
     # VIRTUAL: succeeds (computed on read, indexable)
     conn.execute(
         "ALTER TABLE page_results ADD COLUMN lcp_median REAL "
