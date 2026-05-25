@@ -61,7 +61,11 @@ class MetricSample(BaseModel):
     now; Phase 1 only makes the shape storable.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    # allow_inf_nan=False rejects inf/nan at validation time (WR-01): Pydantic's
+    # JSON mode serializes those to ``null``, so an inf/nan metric would silently
+    # become None on write and break the byte-identical round-trip (criterion #1,
+    # Pitfall 1). Failing loud here surfaces an upstream measurement bug instead.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
     median: float | None = None
     samples: list[float] = Field(default_factory=list)
@@ -87,7 +91,9 @@ class WaterfallEntry(BaseModel):
     extra keys are ignored so a richer Phase-2 shape still loads here.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    # allow_inf_nan=False: reject non-JSON-round-trippable floats (WR-01) — see
+    # MetricSample for the rationale; ``timing_ms`` is the float field here.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
     url: str | None = None
     resource_type: str | None = None
@@ -105,7 +111,11 @@ class PageResult(BaseModel):
     field is nullable/defaulted so the contract never needs retrofitting.
     """
 
-    model_config = ConfigDict(extra="ignore")  # newer-schema blobs load under older code
+    # extra="ignore": newer-schema blobs load under older code.
+    # allow_inf_nan=False: reject non-finite floats on the scalar metric fields
+    # (perf_score, slowest_request_ms, ...) so they never silently null on the
+    # JSON round-trip (WR-01); see MetricSample for the rationale.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
     # --- identity (set now; the only required fields) ---
     url: str  # D-01: as-measured, never mutated
