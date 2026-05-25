@@ -16,8 +16,18 @@ adds the three things w3lib does NOT do and the project requires:
 
 It deliberately does NOT strip ``www`` or ``index.html`` and keeps functional
 query params, so genuinely distinct pages are never over-merged (D-03/D-04,
-Pitfall 6). Malformed / non-URL input returns a deterministic value without
-raising (Security Domain DoS mitigation, threat T-01-01).
+Pitfall 6).
+
+Malformed / non-URL input never raises — it returns a deterministic value
+(Security Domain DoS mitigation, threat T-01-01). Specifically:
+
+  - empty or whitespace-only input short-circuits to ``""`` (the empty-key
+    sentinel) BEFORE w3lib runs, so blank/garbage-that-normalizes-to-empty inputs
+    do NOT collapse onto the real root key (e.g. ``"https://x.com/"``) and merge
+    distinct broken pages into one cross-run identity (WR-03);
+  - other non-URL strings that w3lib still parses are percent-encoded into a
+    deterministic opaque key (e.g. ``"not a url"`` -> ``"not%20a%20url"``);
+  - the rare input that makes w3lib raise falls back to the stripped original.
 """
 
 from urllib.parse import urlsplit, urlunsplit
@@ -44,7 +54,17 @@ def canonical_key(url: str) -> str:
 
     Never raises on malformed input — returns a deterministic string so an
     untrusted/hostile URL cannot crash the pipeline (threat T-01-01).
+
+    Empty or whitespace-only input short-circuits to ``""`` (the empty-key
+    sentinel) so it cannot collapse onto the real root key ``"…/"`` and merge
+    distinct broken pages into one cross-run identity (WR-03).
     """
+    # WR-03: handle empty/blank input explicitly. Without this, w3lib normalizes
+    # "" and "   " to a "/" path, colliding every blank/empty-normalizing input
+    # onto the single real root key and over-merging distinct broken pages. An
+    # empty string is a safe non-colliding sentinel (no valid key is empty).
+    if not (url or "").strip():
+        return ""
     try:
         # 1) Drop tracking params (D-04). remove=True drops the denylisted keys;
         #    keep_fragments=False so the fragment never survives this stage.
