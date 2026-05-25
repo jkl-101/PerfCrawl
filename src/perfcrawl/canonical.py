@@ -42,7 +42,17 @@ _DEFAULT_PORTS: dict[str, str] = {"http": "80", "https": "443"}
 
 
 def _strip_default_port(scheme: str, netloc: str) -> str:
-    """Remove a default port (:80 for http, :443 for https) from ``netloc`` (D-02)."""
+    """Remove a default port (:80 for http, :443 for https) from ``netloc`` (D-02).
+
+    The check is anchored with ``endswith(f":{default}")`` on purpose (IN-04): a
+    bracketed IPv6 literal can CONTAIN the default-port digits inside the address
+    (e.g. ``[fe80::443]`` has a port-less host, and ``[fe80::443]:443`` carries a
+    real trailing port). A substring test like ``":443" in netloc`` would wrongly
+    strip the ``:443`` inside the brackets. ``endswith`` only ever matches a
+    genuine trailing ``:port``, so ``[fe80::443]`` is kept intact,
+    ``[fe80::443]:443`` loses only the trailing port, and a non-default port is
+    preserved. Do NOT "simplify" this to a substring check.
+    """
     default = _DEFAULT_PORTS.get(scheme)
     if default and netloc.endswith(f":{default}"):
         return netloc[: -(len(default) + 1)]
@@ -58,6 +68,18 @@ def canonical_key(url: str) -> str:
     Empty or whitespace-only input short-circuits to ``""`` (the empty-key
     sentinel) so it cannot collapse onto the real root key ``"…/"`` and merge
     distinct broken pages into one cross-run identity (WR-03).
+
+    .. warning::
+
+       The returned key is an OPAQUE cross-run identity string and a SQLite bind
+       parameter — NOT a safe filesystem path component (IN-02). w3lib decodes
+       percent-encoded dots, so ``canonical_key("https://x.com/a/%2e%2e/b")``
+       returns ``"https://x.com/a/../b"`` with LITERAL ``..`` segments (they are
+       not resolved). This is benign in Phase 1 (the key is only ever an opaque
+       SQL-bound string), but a path-traversal trap for any FUTURE consumer that
+       derives a path/filename from the key (e.g. writing a per-page Lighthouse
+       artifact to disk keyed by URL). Such a consumer MUST sanitize the key at
+       that filesystem boundary; never treat ``url_key`` as a safe path component.
     """
     # WR-03: handle empty/blank input explicitly. Without this, w3lib normalizes
     # "" and "   " to a "/" path, colliding every blank/empty-normalizing input
