@@ -144,6 +144,61 @@ def test_url_key_set_on_write_when_missing(conn):
     assert loaded.pages[0].url_key == "https://example.com/Path?a=1&b=2"
 
 
+def test_url_key_whitespace_only_is_regenerated(conn):
+    """A whitespace-only url_key is regenerated, not stored verbatim (WR-07).
+
+    'if not page.url_key' would treat '   ' as truthy and persist the blanks
+    into the self-join column, so the same logical page would never match across
+    runs. The store must strip-check and regenerate the canonical key.
+    """
+    from datetime import UTC, datetime
+
+    from perfcrawl.models import PageResult
+
+    run = RunRecord(
+        started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        target="https://x.com",
+        pages=[PageResult(url="https://Example.com/Path/?b=2&a=1", url_key="   ")],
+    )
+    write_run(conn, run)
+    loaded = read_run(conn, str(run.id))
+    # whitespace was replaced by the derived canonical key, not stored verbatim
+    assert loaded.pages[0].url_key == "https://example.com/Path?a=1&b=2"
+    # and the generated self-join column matches (no whitespace leaked through)
+    col_key = conn.execute(
+        "SELECT url_key FROM page_results WHERE run_id = ?", (str(run.id),)
+    ).fetchone()[0]
+    assert col_key == "https://example.com/Path?a=1&b=2"
+
+
+def test_write_run_does_not_mutate_caller(conn):
+    """write_run never mutates the caller's RunRecord (WR-06).
+
+    Key derivation happens on a deep copy, so a caller's blank/whitespace
+    url_key values survive write_run unchanged for reuse afterward.
+    """
+    from datetime import UTC, datetime
+
+    from perfcrawl.models import PageResult
+
+    run = RunRecord(
+        started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        target="https://x.com",
+        pages=[
+            PageResult(url="https://x.com/a", url_key=""),
+            PageResult(url="https://x.com/b", url_key="   "),
+        ],
+    )
+    write_run(conn, run)
+    # The caller's object is unchanged: its blank keys were NOT back-filled.
+    assert run.pages[0].url_key == ""
+    assert run.pages[1].url_key == "   "
+    # But the persisted record DID derive the canonical keys.
+    loaded = read_run(conn, str(run.id))
+    assert loaded.pages[0].url_key == "https://x.com/a"
+    assert loaded.pages[1].url_key == "https://x.com/b"
+
+
 def test_generated_column_cannot_drift(conn, sample_run: RunRecord):
     """The generated url_key column is computed FROM the blob, so it cannot disagree."""
     write_run(conn, sample_run)
