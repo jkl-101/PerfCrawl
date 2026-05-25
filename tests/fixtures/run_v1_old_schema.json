@@ -1,0 +1,16 @@
+{
+  "id": "3f1c2b9a-0000-4000-8000-0000000000b2",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "target": "https://studyhalo.com",
+  "schema_version": 1,
+  "pages": [
+    {
+      "url": "https://studyhalo.com/",
+      "url_key": "https://studyhalo.com/"
+    },
+    {
+      "url": "https://studyhalo.com/courses?page=2",
+      "url_key": "https://studyhalo.com/courses?page=2"
+    }
+  ]
+}
