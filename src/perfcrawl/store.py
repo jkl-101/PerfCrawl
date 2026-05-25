@@ -79,28 +79,36 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
     the caller left it blank (D-01: the raw ``url`` is never mutated — only the
     derived key is set). The exact ``model_dump_json()`` bytes are written so the
     record reads back identically.
+
+    The whole write is wrapped in an explicit transaction (``with conn:``): the
+    ``runs`` row and every ``page_results`` row commit together on success, or the
+    transaction ROLLS BACK on any exception so a mid-write failure can never leave
+    a partial run that a later ``commit()`` would flush to disk (criterion #1 — a
+    run is written whole or not at all, CR-01).
     """
     for page in run.pages:
         if not page.url_key:
             page.url_key = canonical_key(page.url)
 
-    conn.execute(
-        "INSERT INTO runs (id, started_at, target, schema_version, record_json) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (
-            str(run.id),
-            run.started_at.isoformat(),
-            run.target,
-            run.schema_version,
-            run.model_dump_json(),
-        ),
-    )
-    for page in run.pages:
+    # `with conn:` is a transaction context manager — it COMMITs on a clean exit
+    # and ROLLS BACK if the block raises, so a half-written run is never left in
+    # an open transaction for a subsequent commit() to persist (CR-01).
+    with conn:
         conn.execute(
-            "INSERT INTO page_results (run_id, record_json) VALUES (?, ?)",
-            (str(run.id), page.model_dump_json()),
+            "INSERT INTO runs (id, started_at, target, schema_version, record_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                str(run.id),
+                run.started_at.isoformat(),
+                run.target,
+                run.schema_version,
+                run.model_dump_json(),
+            ),
         )
-    conn.commit()
+        conn.executemany(
+            "INSERT INTO page_results (run_id, record_json) VALUES (?, ?)",
+            [(str(run.id), page.model_dump_json()) for page in run.pages],
+        )
 
 
 def read_run(conn: sqlite3.Connection, run_id: str) -> RunRecord:
