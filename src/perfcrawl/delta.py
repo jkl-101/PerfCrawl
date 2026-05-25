@@ -32,7 +32,7 @@ Design invariants:
 
 from math import isfinite
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
 from perfcrawl.registry import METRIC_POLARITY, Polarity
@@ -47,6 +47,14 @@ class RunDelta(BaseModel):
     change guarded against ``previous == 0``/``None`` (D-10); ``direction`` is the
     polarity-derived status (D-09/D-11/D-12).
     """
+
+    # extra="ignore": match every model in models.py for uniform forward-compat
+    # intent (IN-01). allow_inf_nan=False is the load-bearing half (WR-01): a
+    # ``delta_abs`` that overflowed to inf would otherwise serialize to ``null``
+    # in Pydantic JSON mode and silently drop a real delta. The ``_safe_abs`` /
+    # ``safe_pct`` finite guards are the first line of defense; this is the
+    # model-layer backstop so a non-finite delta fails loud instead of nulling.
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
     url_key: str
     metric: str
@@ -130,10 +138,19 @@ def safe_pct(current: float | None, previous: float | None) -> float | None:
 
 
 def _safe_abs(current: float | None, previous: float | None) -> float | None:
-    """Absolute delta when both sides are present, else ``None``."""
+    """Absolute delta when both sides are present and finite, else ``None``.
+
+    Mirrors the ``safe_pct`` finite guard (WR-01): subtracting two individually
+    finite floats can still overflow to ``inf`` (e.g. ``1.5e308 - -1.5e308``).
+    An ``inf``/``nan`` ``delta_abs`` serializes to ``null`` in Pydantic JSON
+    mode, silently nulling a real delta, so a non-finite diff yields ``None``
+    here (and ``RunDelta``'s ``allow_inf_nan=False`` is the model-layer backstop)
+    to honor the documented "never inf/NaN" contract (D-10).
+    """
     if current is None or previous is None:
         return None
-    return current - previous
+    diff = current - previous
+    return diff if isfinite(diff) else None
 
 
 def compute_deltas(current_run: RunRecord, previous_run: RunRecord) -> list[RunDelta]:
