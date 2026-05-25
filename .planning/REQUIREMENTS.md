@@ -99,17 +99,46 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Populated during roadmap creation. Each requirement maps to exactly one phase.
+Each v1 requirement maps to exactly one phase. See ROADMAP.md for phase detail.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmap)_ | — | Pending |
+| HIST-01 | Phase 1 — Data Model & Persistence Foundation | Pending |
+| METRIC-01 | Phase 2 — Single-Page Measurement Slice | Pending |
+| METRIC-02 | Phase 2 — Single-Page Measurement Slice | Pending |
+| METRIC-03 | Phase 2 — Single-Page Measurement Slice | Pending |
+| METRIC-04 | Phase 2 — Single-Page Measurement Slice | Pending |
+| METRIC-05 | Phase 2 — Single-Page Measurement Slice | Pending |
+| RUN-01 | Phase 2 — Single-Page Measurement Slice | Pending |
+| RUN-02 | Phase 2 — Single-Page Measurement Slice | Pending |
+| RUN-03 | Phase 2 — Single-Page Measurement Slice | Pending |
+| RUN-04 | Phase 2 — Single-Page Measurement Slice | Pending |
+| OUT-03 | Phase 2 — Single-Page Measurement Slice | Pending |
+| OUT-04 | Phase 2 — Single-Page Measurement Slice | Pending |
+| CLI-01 | Phase 2 — Single-Page Measurement Slice | Pending |
+| CRAWL-01 | Phase 3 — Site-Wide Crawler | Pending |
+| CRAWL-02 | Phase 3 — Site-Wide Crawler | Pending |
+| CRAWL-03 | Phase 3 — Site-Wide Crawler | Pending |
+| CRAWL-04 | Phase 3 — Site-Wide Crawler | Pending |
+| CRAWL-05 | Phase 3 — Site-Wide Crawler | Pending |
+| AUTH-01 | Phase 4 — Authenticated Crawling | Pending |
+| AUTH-02 | Phase 4 — Authenticated Crawling | Pending |
+| AUTH-03 | Phase 4 — Authenticated Crawling | Pending |
+| AUTH-04 | Phase 4 — Authenticated Crawling | Pending |
+| AI-01 | Phase 5 — AI Analysis | Pending |
+| AI-02 | Phase 5 — AI Analysis | Pending |
+| AI-03 | Phase 5 — AI Analysis | Pending |
+| OUT-01 | Phase 6 — Output Suite & Regression Flagging | Pending |
+| OUT-02 | Phase 6 — Output Suite & Regression Flagging | Pending |
+| HIST-02 | Phase 6 — Output Suite & Regression Flagging | Pending |
 
 **Coverage:**
-- v1 requirements: 25 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 25 ⚠️
+- v1 requirements: 28 total (CRAWL 5 + AUTH 4 + METRIC 5 + RUN 4 + AI 3 + HIST 2 + OUT 4 + CLI 1)
+- Mapped to phases: 28 ✓
+- Unmapped: 0 ✓
+
+**Per-phase counts:** Phase 1 = 1 · Phase 2 = 12 · Phase 3 = 5 · Phase 4 = 4 · Phase 5 = 3 · Phase 6 = 3 (= 28 unique requirements; each requirement appears exactly once, no duplicates)
 
 ---
 *Requirements defined: 2026-05-25*
-*Last updated: 2026-05-25 after initial definition*
+*Last updated: 2026-05-25 after roadmap creation (traceability populated, 28/28 v1 mapped)*
