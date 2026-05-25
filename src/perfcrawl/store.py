@@ -90,6 +90,13 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
         if not page.url_key:
             page.url_key = canonical_key(page.url)
 
+    # PRAGMA foreign_keys is PER-CONNECTION, not stored in the DB (WR-05). A
+    # caller who init_db()s once and later opens a fresh connection for writes
+    # gets foreign_keys=OFF by default, letting orphan page_results rows slip in
+    # past the REFERENCES constraint. Re-assert it here (cheap, idempotent) so FK
+    # enforcement holds on every write connection, not only the init_db one.
+    conn.execute("PRAGMA foreign_keys = ON")
+
     # `with conn:` is a transaction context manager — it COMMITs on a clean exit
     # and ROLLS BACK if the block raises, so a half-written run is never left in
     # an open transaction for a subsequent commit() to persist (CR-01).
