@@ -85,6 +85,14 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
     it, diff it against a snapshot, write it to a second store) still sees its
     original blank ``url_key`` values.
 
+    ``url_key`` is the per-run canonical page identity: one page per key per run.
+    Two pages sharing a key would silently collapse in any reader that buckets a
+    run's pages by ``url_key`` (e.g. ``compute_deltas``'s ``{p.url_key: p}`` keeps
+    only the last) — masking a regression or fabricating an improvement. A
+    duplicate signals an upstream crawler bug, so this is rejected at WRITE time
+    with a ``ValueError`` (the invariant then holds for every reader) rather than
+    silently grouped/merged (WR-02).
+
     The whole write is wrapped in an explicit transaction (``with conn:``): the
     ``runs`` row and every ``page_results`` row commit together on success, or the
     transaction ROLLS BACK on any exception so a mid-write failure can never leave
@@ -100,6 +108,17 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
         # logical page in another run — silently breaking the cross-run delta.
         if not (page.url_key or "").strip():
             page.url_key = canonical_key(page.url)
+
+    # Enforce the one-page-per-key-per-run invariant (WR-02). Checked AFTER key
+    # derivation so it covers both caller-supplied and just-derived keys. A
+    # duplicate canonical key means two of this run's pages share a cross-run
+    # identity — a reader that buckets by url_key would drop all but one. Reject
+    # it loudly (upstream crawler bug) instead of silently grouping/merging.
+    seen: set[str] = set()
+    for page in run.pages:
+        if page.url_key in seen:
+            raise ValueError(f"duplicate url_key in run: {page.url_key!r}")
+        seen.add(page.url_key)
 
     # PRAGMA foreign_keys is PER-CONNECTION, not stored in the DB (WR-05). A
     # caller who init_db()s once and later opens a fresh connection for writes
