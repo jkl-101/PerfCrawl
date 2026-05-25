@@ -13,7 +13,7 @@ PerfCrawl replaces the slow manual per-page performance audit with one CLI comma
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Data Model & Persistence Foundation** - Define the canonical PageResult/RunRecord/RunDelta model and the SQLite run store every other component depends on
+- [x] **Phase 1: Data Model & Persistence Foundation** - Define the canonical PageResult/RunRecord/RunDelta model and the SQLite run store every other component depends on (completed 2026-05-25)
 - [ ] **Phase 2: Single-Page Measurement Slice** - Prove the Lighthouse-over-CDP engine seam on one URL end-to-end: measure → normalize → persist → export CSV/JSON + raw artifacts via CLI, with median-of-N
 - [ ] **Phase 3: Site-Wide Crawler** - Scale measurement from one URL to a whole site with link + sitemap discovery, robots.txt, caps, include/exclude, and per-host politeness
 - [ ] **Phase 4: Authenticated Crawling** - Reach pages behind login safely: login once, reuse session, denylist destructive links, detect session loss
@@ -47,7 +47,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — Polarity-driven RunDelta engine on fixtures (criterion #2)
+- [x] 01-03-PLAN.md — Polarity-driven RunDelta engine on fixtures (criterion #2)
 
 ### Phase 2: Single-Page Measurement Slice
 
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Model & Persistence Foundation | 2/3 | In Progress|  |
+| 1. Data Model & Persistence Foundation | 3/3 | Complete   | 2026-05-25 |
 | 2. Single-Page Measurement Slice | 0/TBD | Not started | - |
 | 3. Site-Wide Crawler | 0/TBD | Not started | - |
 | 4. Authenticated Crawling | 0/TBD | Not started | - |

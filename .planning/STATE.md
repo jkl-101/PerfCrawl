@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
+status: verifying
 stopped_at: Completed 01-02-PLAN.md (model + store)
-last_updated: "2026-05-25T12:45:18.930Z"
+last_updated: "2026-05-25T12:50:22.967Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
-  percent: 0
+  completed_plans: 3
+  percent: 17
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-05-25)
 
 Phase: 01 (data-model-persistence-foundation) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-25
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [███████░░░] 67%
 *Updated after each plan completion*
 | Phase 01 P01 | 2 | 3 tasks | 10 files |
 | Phase 01 P02 | 3 | 2 tasks | 7 files |
+| Phase 01 P03 | 3 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,8 @@ Recent decisions affecting current work:
 - [Phase ?]: [Phase 1 / Plan 02]: Round-trip identity (A3) implemented as BOTH model equality AND exact-byte preservation (record_json TEXT) so criterion #1 holds under either interpretation.
 - [Phase ?]: [Phase 1 / Plan 02]: STORED-via-ALTER (D-07/Pitfall 2) only raises on a NON-EMPTY table on SQLite 3.50.4; VIRTUAL is the supported promote-a-metric path.
 - [Phase ?]: [Phase 1 / Plan 02]: WaterfallEntry modeled as a typed submodel (not list[dict]) with extra=ignore for forward-compat (METRIC-03).
+- [Phase ?]: Phase 1 / Plan 03: RunDelta direction derived from central METRIC_POLARITY registry (D-09), never hardcoded; classify() uses page-presence flags to split whole-page new/removed from one-sided-metric not_comparable (D-11).
+- [Phase ?]: Phase 1 / Plan 03: compute_deltas returns a FLAT list[RunDelta] over the union of pages & metrics (Open Q2); MetricSample fields compared by median; deltaPct guarded against previous==0 (D-10); unchanged is literal equality, no variance gate (Phase 6, D-12).
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-25T12:45:18.926Z
+Last session: 2026-05-25T12:50:04.357Z
 Stopped at: Completed 01-02-PLAN.md (model + store)
 Resume file: None
