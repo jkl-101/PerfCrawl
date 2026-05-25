@@ -23,6 +23,7 @@ is built to exercise every one of these cases in one place.
 import math
 
 import pytest
+from pydantic import ValidationError
 
 from perfcrawl.delta import RunDelta, compute_deltas, safe_pct
 from perfcrawl.models import DirectionStatus, MetricSample, PageResult, RunRecord
@@ -151,6 +152,47 @@ def test_safe_pct_finite_case_unchanged():
     assert safe_pct(5.0, 0) is None
     assert safe_pct(5.0, None) is None
     assert safe_pct(None, 5.0) is None
+
+
+def test_delta_abs_finite_guard_on_overflow():
+    """delta_abs is None when subtracting two finite floats overflows to inf (WR-01).
+
+    Each input passes the model layer's allow_inf_nan=False (each is finite); the
+    overflow happens only inside the subtraction in the delta engine. The result
+    must NOT be inf — an inf delta_abs serializes to null in JSON mode and would
+    silently drop a real delta. ``_safe_abs`` finite-guards it like ``safe_pct``.
+    """
+    prev = _one_page_run(
+        PageResult(
+            url="https://t/p", url_key="https://t/p", slowest_request_ms=-1.5e308
+        )
+    )
+    cur = _one_page_run(
+        PageResult(
+            url="https://t/p", url_key="https://t/p", slowest_request_ms=1.5e308
+        )
+    )
+    idx = _by_key_metric(compute_deltas(cur, prev))
+    d = idx[("https://t/p", "slowest_request_ms")]
+    # The subtraction (1.5e308 - -1.5e308) overflows to inf -> guarded to None.
+    assert d.delta_abs is None
+    assert d.delta_pct is None
+
+
+def test_run_delta_rejects_non_finite_field():
+    """RunDelta's allow_inf_nan=False backstop rejects an inf/nan field (WR-01/IN-01).
+
+    The model config is the second line of defense: even if a non-finite value
+    reached a RunDelta field it would be rejected at validation instead of
+    silently serializing to null.
+    """
+    with pytest.raises(ValidationError):
+        RunDelta(
+            url_key="https://t/p",
+            metric="slowest_request_ms",
+            current=math.inf,
+            direction=DirectionStatus.REGRESSION,
+        )
 
 
 # --- D-11: status-enum edge cases (new / removed / not_comparable) -----------
