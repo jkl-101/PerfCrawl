@@ -76,9 +76,14 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
     """Persist ``run`` and each of its pages as JSON-TEXT blobs (criterion #1).
 
     For every page, ``url_key`` is derived from ``canonical_key(page.url)`` when
-    the caller left it blank (D-01: the raw ``url`` is never mutated — only the
-    derived key is set). The exact ``model_dump_json()`` bytes are written so the
-    record reads back identically.
+    the caller left it blank OR whitespace-only (D-01: the raw ``url`` is never
+    mutated — only the derived key is set). The exact ``model_dump_json()`` bytes
+    are written so the record reads back identically.
+
+    The caller's ``RunRecord`` is NOT mutated (WR-06): key derivation happens on a
+    deep copy, so a caller that reuses the object after ``write_run`` (re-serialize
+    it, diff it against a snapshot, write it to a second store) still sees its
+    original blank ``url_key`` values.
 
     The whole write is wrapped in an explicit transaction (``with conn:``): the
     ``runs`` row and every ``page_results`` row commit together on success, or the
@@ -86,8 +91,14 @@ def write_run(conn: sqlite3.Connection, run: RunRecord) -> None:
     a partial run that a later ``commit()`` would flush to disk (criterion #1 — a
     run is written whole or not at all, CR-01).
     """
+    # Derive keys on a deep copy so the caller's object is never mutated (WR-06).
+    run = run.model_copy(deep=True)
     for page in run.pages:
-        if not page.url_key:
+        # Regenerate when the key is missing OR whitespace-only (WR-07): a
+        # truthy-but-blank key like "   " would otherwise be stored verbatim into
+        # the self-join column and never match the canonical key of the same
+        # logical page in another run — silently breaking the cross-run delta.
+        if not (page.url_key or "").strip():
             page.url_key = canonical_key(page.url)
 
     # PRAGMA foreign_keys is PER-CONNECTION, not stored in the DB (WR-05). A
