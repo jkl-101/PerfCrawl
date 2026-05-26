@@ -206,7 +206,7 @@ Follow those rules. This section is the project-specific status snapshot.
 | PROVE — threat | secure-phase | `01-SECURITY.md` (9/9 closed `c0f2572`) | ✓ |
 | PROVE — Nyquist | validate-phase | `01-VALIDATION.md` (13/13 covered, `0d84439`) | ✓ |
 | PROVE — user | verify-work | `01-UAT.md` (12/12 passed `0f407d6`) | ✓ |
-| (capture) | extract-learnings | `01-LEARNINGS.md` | ⬜ optional |
+| (capture) | extract-learnings | `01-LEARNINGS.md` (14 decisions, 9 lessons, 11 patterns, 9 surprises) | ✓ |
 | SHIP | **ship** | (admin-only, no PR — see ship note below) | ✓ |
 
 **Ship note (Phase 01):** Work was committed directly to `main` and pushed to

@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: phase_01_shipped
 stopped_at: Phase 01 shipped (admin-only, work landed directly on main pre-PR-flow) — ready to discuss Phase 2 on a feature branch
-last_updated: 2026-05-26T00:00:00.000Z
+last_updated: 2026-05-26T00:30:00.000Z
 last_activity: 2026-05-26
 progress:
   total_phases: 6
