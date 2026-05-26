@@ -207,15 +207,25 @@ Follow those rules. This section is the project-specific status snapshot.
 | PROVE — Nyquist | validate-phase | `01-VALIDATION.md` (13/13 covered, `0d84439`) | ✓ |
 | PROVE — user | verify-work | `01-UAT.md` (12/12 passed `0f407d6`) | ✓ |
 | (capture) | extract-learnings | `01-LEARNINGS.md` | ⬜ optional |
-| SHIP | **ship** | PR | ✗ **NEXT** |
+| SHIP | **ship** | (admin-only, no PR — see ship note below) | ✓ |
 
-**Next command:** `/gsd-ship 1`
+**Ship note (Phase 01):** Work was committed directly to `main` and pushed to
+`origin/main` while `git.branching_strategy` was `"none"`, so by the time
+`/gsd-ship 1` ran there was no diff to PR (`main == origin/main`). Phase 01
+was closed administratively (this CLAUDE.md + `.planning/STATE.md` update)
+and `git.branching_strategy` was flipped to `"phase"` in
+`.planning/config.json`. From Phase 02 forward, work happens on
+`gsd/phase-{N}-{slug}` branches and ships via real `gh pr create`.
 
-**Do NOT propose:** `audit-milestone` (milestone has phases 2-N remaining),
+**Next command:** `/gsd-discuss-phase 2` (optionally `/gsd-extract-learnings 1`
+first to capture Phase 1 lessons before moving on).
+
+**Do NOT propose:** `audit-milestone` (milestone has phases 2-6 remaining),
 re-running any ✓ gate (their artifacts are already closed on disk),
-or `/gsd-plan-phase 2` (phase 1 is not shipped yet).
+`/gsd-ship 1` again (phase 01 is closed), or trying to retroactively open a
+PR for Phase 01 (work is already on `main`; that history is set).
 
-Update this table as phase 1 advances and when later phases reach the same stages.
+Update this table as later phases reach the same stages.
 
 <!-- GSD:profile-start -->
 ## Developer Profile

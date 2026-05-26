@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 01 complete (3/3) — ready to discuss Phase 2
-last_updated: 2026-05-25T12:59:01.328Z
-last_activity: 2026-05-25
+status: phase_01_shipped
+stopped_at: Phase 01 shipped (admin-only, work landed directly on main pre-PR-flow) — ready to discuss Phase 2 on a feature branch
+last_updated: 2026-05-26T00:00:00.000Z
+last_activity: 2026-05-26
 progress:
   total_phases: 6
   completed_phases: 1
@@ -27,8 +27,15 @@ See: .planning/PROJECT.md (updated 2026-05-25)
 
 Phase: 2
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-05-25
+Status: Phase 01 shipped (admin-only) — ready to discuss Phase 2 on a feature branch
+Last activity: 2026-05-26
+
+**Ship note (Phase 01):** Work was committed directly to `main` and pushed to
+`origin/main` before the team switched to feature branches. No PR could be
+opened because `main == origin/main` with no diff. Phase 01 was therefore
+closed administratively (this STATE.md update + branching_strategy flip).
+From Phase 02 forward, work happens on `gsd/phase-{N}-{slug}` branches and
+ships via a real `gh pr create`.
 
 Progress: [██████████] 100%
 
