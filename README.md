@@ -14,13 +14,12 @@ component targets.
 ## Install / run
 
 **PerfCrawl is currently a repo-checkout-only tool.** The Node `lighthouse-worker/`
-lives as a sibling of `src/` and is **not bundled into the wheel** — a `pip install
-perfcrawl` would leave the worker resolution path broken (`__file__`'s
-`parents[2]` becomes the Python `lib/` directory, where `lighthouse-worker/run.mjs`
-does not exist).
+lives as a sibling of `src/` and is **not bundled into the wheel** — a future
+`pip install perfcrawl` would not ship the worker, so the runtime path resolution
+(`__file__`'s `parents[2]` → repo root) would point at a directory that does not
+exist. `preflight()` raises an actionable `MeasurementError` if you hit this path.
 
-Until Phase 3 makes the worker location configurable (`PERFCRAWL_WORKER_DIR` env
-variable / CLI flag), run from a clone of the repository via `uv run`:
+Run from a clone of the repository via `uv run`:
 
 ```bash
 git clone <repo>
@@ -29,8 +28,12 @@ uv sync                                     # Python deps
 cd lighthouse-worker && npm ci && cd ..     # Node worker (requires Node >=22.19)
 uv run playwright install chromium          # Browser binary
 
-uv run python -m perfcrawl.cli measure https://example.com/
+uv run perfcrawl measure https://example.com/
 ```
+
+Phase 3 will make the worker location configurable (`PERFCRAWL_WORKER_DIR` env
+variable / CLI flag), at which point `pip install perfcrawl` + a separate worker
+install will be a supported deployment.
 
 ## Development
 
