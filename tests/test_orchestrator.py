@@ -451,6 +451,17 @@ def test_devtools_port_timeout_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
     # No-op sleep, so polling loops as fast as possible without ever finding the file.
     monkeypatch.setattr(orch.time, "sleep", lambda _s: None)
+    # WR-05: deadline is monotonic-clock based; advance the fake clock past
+    # ``DEVTOOLS_PORT_FILE_TIMEOUT_S`` after one iteration so the loop exits
+    # quickly without waiting real wall-clock seconds.
+    tick = {"n": 0}
+
+    def _fake_monotonic():
+        # First call sets deadline; subsequent calls jump past it.
+        tick["n"] += 1
+        return 0.0 if tick["n"] == 1 else 999.0
+
+    monkeypatch.setattr(orch.time, "monotonic", _fake_monotonic)
 
     with pytest.raises(orch.MeasurementError) as exc_info:
         orch._launch_chrome_with_cdp_port()

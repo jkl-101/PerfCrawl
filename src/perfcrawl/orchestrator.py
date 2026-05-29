@@ -101,9 +101,17 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
     )
 
     port_file = user_data_dir / "DevToolsActivePort"
-    max_attempts = int(DEVTOOLS_PORT_FILE_TIMEOUT_S / DEVTOOLS_PORT_POLL_INTERVAL_S)
-    for _ in range(max_attempts):
-        time.sleep(DEVTOOLS_PORT_POLL_INTERVAL_S)
+    # WR-05: monotonic-deadline loop. Two improvements over the prior
+    # ``for _ in range(int(timeout/interval)):`` shape:
+    #   1. Check existence BEFORE sleeping so a file already present at t=0
+    #      returns without paying one ``DEVTOOLS_PORT_POLL_INTERVAL_S`` wait
+    #      — Chrome can write the file in milliseconds on a fast machine.
+    #   2. Drop the ``int(...)`` truncation that turned a 5.0s budget at a
+    #      0.15s interval (33.33 attempts) into 33 — fewer than the timeout
+    #      implies. The deadline is monotonic-clock based and honors the
+    #      full budget exactly.
+    deadline = time.monotonic() + DEVTOOLS_PORT_FILE_TIMEOUT_S
+    while True:
         if port_file.exists():
             text = port_file.read_text().strip()
             if text:
@@ -111,9 +119,13 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
                 first_line = text.splitlines()[0]
                 try:
                     port = int(first_line)
+                    return proc, port, user_data_dir
                 except ValueError:
-                    continue
-                return proc, port, user_data_dir
+                    # Partial / mid-write file content — keep polling.
+                    pass
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(DEVTOOLS_PORT_POLL_INTERVAL_S)
 
     # Timeout: never wrote the file. CR-02 + CR-03: kill Chrome, wait to reap
     # so it never becomes a <defunct> zombie, then remove the user_data_dir
