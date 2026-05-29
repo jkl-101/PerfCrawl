@@ -30,6 +30,7 @@ transaction wrapper — a write either lands whole or not at all (CR-01).
 """
 
 import csv
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -215,8 +216,11 @@ def write_outputs(
     # bytes here, naive consumers (jq, awk, gspread cell-upload, and any
     # ``open(..., newline="\n")`` reader) see literal ``\r`` characters at
     # end-of-row. Normalize to LF-only before the atomic write.
-    import io  # local: only needed here, keeps the module surface tight
-
+    # IN-06: ``import io`` lives at the module top (alongside ``import csv``,
+    # ``import os``, ``import tempfile``) rather than inline here. Stdlib
+    # imports are cached and free on subsequent calls; inline imports
+    # complicate static analysis (mypy, ruff's I001) and grep discovery for
+    # no real benefit.
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="raise")
     writer.writeheader()
