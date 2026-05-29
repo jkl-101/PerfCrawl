@@ -63,8 +63,21 @@ Plans:
   4. The completed run is persisted to SQLite and written out as a flat one-row CSV and a full-fidelity JSON, and the raw Lighthouse JSON + HTML artifacts are saved per page
   5. The command is non-interactive and machine-readable (exit code + JSON output), runnable as an on-demand CLI
 
-**Plans**: TBD
+**Plans**: 4 plans
 **UI hint**: yes
+Plans:
+**Wave 1**
+
+- [x] 02-01-PLAN.md — Worker scaffolding + IN-02-safe slug + Phase 2 constants + LH→PageResult normalizer with version gate + LH-13 fixtures (METRIC-01..05, RUN-01, RUN-02)
+- [x] 02-02-PLAN.md — Median-of-N aggregator (aggregate_samples + aggregate_page_samples) with finite-guard + D-16 honest empty (RUN-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-03-PLAN.md — Lighthouse subprocess worker + Playwright + CDP orchestrator with D-14 retry + D-03 cold cache (RUN-03, RUN-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 02-04-PLAN.md — Typer CLI + Rich human table + --json + SQLite persistence + on-disk CSV/JSON/raw-LH writers + e2e smoke (OUT-03, OUT-04, CLI-01)
 
 ### Phase 3: Site-Wide Crawler
 
@@ -134,7 +147,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Data Model & Persistence Foundation | 3/3 | Complete   | 2026-05-25 |
-| 2. Single-Page Measurement Slice | 0/TBD | Not started | - |
+| 2. Single-Page Measurement Slice | 2/4 | In Progress|  |
 | 3. Site-Wide Crawler | 0/TBD | Not started | - |
 | 4. Authenticated Crawling | 0/TBD | Not started | - |
 | 5. AI Analysis | 0/TBD | Not started | - |
