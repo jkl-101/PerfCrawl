@@ -304,3 +304,40 @@ def test_cli_imports_exit_code_constant() -> None:
 
     src = inspect.getsource(cli_module)
     assert "ExitCode" in src
+
+
+def test_render_human_table_handles_empty_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """IN-02: ``_render_human_table`` must not raise IndexError on a zero-page RunRecord.
+
+    The orchestrator currently guarantees ``len(run.pages) >= 1`` because it
+    raises ``MeasurementError`` when all samples fail. A future Phase 3
+    regression that builds a zero-page RunRecord (e.g. a multi-page crawl
+    where every page failed but the RunRecord was still constructed) would
+    crash ``cli._render_human_table`` with a bare ``IndexError`` instead of a
+    clean message. Guard the indexing so the CLI degrades gracefully.
+
+    Pin: build a stub RunRecord with ``pages=[]`` and assert the CLI exits 0
+    with a "no pages" notice on stdout instead of ``IndexError``.
+    """
+    empty_run = RunRecord(
+        id=UUID("3f1c2b9a-0000-4000-8000-0000000000e3"),
+        started_at=datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC),
+        target="https://example.com/",
+        chrome_version="137.0.7151.40",
+        lighthouse_version="13.3.0",
+        emulation="mobile",
+        pages=[],  # IN-02: this is the regression vector.
+    )
+    _patch_measure(monkeypatch, return_value=(empty_run, {}))
+    result = runner.invoke(
+        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
+    )
+    # Should not raise IndexError — exit cleanly (success, with a notice).
+    assert result.exit_code == ExitCode.SUCCESS, (
+        f"empty-pages RunRecord crashed the CLI: "
+        f"stdout={result.stdout!r} stderr={result.stderr!r} exc={result.exception!r}"
+    )
+    # A clean message tells the user there was nothing to render.
+    assert "No pages measured" in result.stdout
