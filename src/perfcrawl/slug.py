@@ -67,7 +67,12 @@ def page_slug(url_key: str, *, max_len: int = 80) -> str:
         stem = stem.strip("._-") or "_"
         # Truncate to max_len so the resulting filename always fits typical
         # filesystem limits even after a collision suffix is appended.
-        return stem[:max_len]
+        # WR-07: ``stem[:max_len]`` can re-introduce a trailing '.' / '_' / '-'
+        # if the character at position ``max_len-1`` happens to be one of those.
+        # Windows rejects filenames ending in '.' or whitespace, so apply the
+        # same rstrip after truncation as the strip above applied before.
+        # The "_" fallback is the same documented sentinel used elsewhere.
+        return stem[:max_len].rstrip("._-") or "_"
     except Exception:
         # Deterministic, never-raising fallback for non-URL / hostile input.
         return "_"
