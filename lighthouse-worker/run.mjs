@@ -49,6 +49,22 @@ if (!values.port || !values.url) {
   process.exit(1);
 }
 
+// IN-01: validate --form-factor against the known set BEFORE Lighthouse
+// runs. The Python orchestrator already raises UserError on bad values, but
+// the worker is a separate argv contract — a direct ``node run.mjs
+// --form-factor=tablet ...`` invocation (Phase 3 scripts, debug sessions,
+// the test suite) should not silently fall through to a confusing
+// Lighthouse "Screen emulation does not match formFactor" deep-stack error.
+// Mirrors the labeled-proxy defense-in-depth pattern: both layers enforce
+// the contract independently.
+const VALID_FORM_FACTORS = new Set(["mobile", "desktop"]);
+if (!VALID_FORM_FACTORS.has(values["form-factor"])) {
+  process.stderr.write(
+    `worker error: --form-factor must be 'mobile' or 'desktop'; got ${JSON.stringify(values["form-factor"])}\n`,
+  );
+  process.exit(1);
+}
+
 const flags = {
   port: Number(values.port),
   output: ["json", "html"], // Pitfall 6: returns [jsonStr, htmlStr]
