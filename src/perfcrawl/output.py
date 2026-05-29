@@ -238,10 +238,14 @@ def write_outputs(
             # a filename component. The raw url_key must NEVER be interpolated
             # directly into a path string — page_slug() is the sanitizer.
             base_slug = page_slug(page.url_key)
-            if report_json is not None:
+            # WR-04: truthiness, not ``is not None`` — empty strings (the
+            # orchestrator's previous default for a missing key) used to slip
+            # through and produce zero-byte ``<slug>.{json,html}`` files. A
+            # missing payload should produce a MISSING file, not an empty one.
+            if report_json:
                 json_path = _unique_slug_path(lh_dir, base_slug, ".json")
                 _atomic_write_text(json_path, report_json)
-            if report_html is not None:
+            if report_html:
                 html_path = _unique_slug_path(lh_dir, base_slug, ".html")
                 _atomic_write_text(html_path, report_html)
 

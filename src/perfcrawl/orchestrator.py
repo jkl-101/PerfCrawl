@@ -210,9 +210,13 @@ def measure_url(
                             # OUT-03 side-channel: stash the FIRST successful
                             # sample's reportJson + reportHtml strings for the
                             # CLI's output.write_outputs to land on disk.
+                            # WR-04: use the empty string only as a "key absent"
+                            # signal; output.py treats falsy strings as "no
+                            # artifact" so a malformed envelope produces a
+                            # missing file rather than a zero-byte one.
                             first_raw_report = (
-                                lh.get("reportJson", ""),
-                                lh.get("reportHtml", ""),
+                                lh.get("reportJson") or "",
+                                lh.get("reportHtml") or "",
                             )
                 finally:
                     context.close()
