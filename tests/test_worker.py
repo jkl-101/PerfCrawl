@@ -327,3 +327,62 @@ def test_worker_drains_large_stdout_payload(tmp_path: Path):
     assert len(parsed["reportJson"]) == 1_500_000
     assert len(parsed["reportHtml"]) == 1_500_000
     assert all(c == "x" for c in parsed["reportJson"][:1000])
+
+
+def test_worker_rejects_invalid_form_factor():
+    """IN-01: ``--form-factor=tablet`` must fail fast with a clean error.
+
+    The Python orchestrator already raises ``UserError`` on unknown emulation
+    values before any subprocess launches, but the worker is a separate argv
+    contract — a direct ``node run.mjs --form-factor=tablet ...`` invocation
+    (a future Phase 3 script, a developer debug session, the test suite)
+    should not silently fall through to Lighthouse with a confusing
+    "Screen emulation … does not match formFactor" deep-stack error.
+
+    Defense in depth at both layers, mirroring the labeled-proxy invariant
+    pattern: model layer + normalizer + display layer all enforce the same
+    contract independently.
+
+    Skipped when ``node`` is missing OR when the worker's npm modules are
+    absent (the test directly invokes ``run.mjs`` which top-level-imports
+    the ``lighthouse`` npm package).
+    """
+    from perfcrawl.lighthouse_worker import WORKER_SCRIPT
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node binary not on PATH; IN-01 regression requires Node runtime")
+    if not WORKER_SCRIPT.exists():
+        pytest.skip(f"worker script missing at {WORKER_SCRIPT}")
+    node_modules = WORKER_SCRIPT.parent / "node_modules" / "lighthouse"
+    if not node_modules.exists():
+        pytest.skip(
+            f"lighthouse npm package not installed at {node_modules}; "
+            f"run `cd lighthouse-worker && npm ci` to enable this test"
+        )
+
+    # Use port=0 + a non-routable URL because the form-factor check must
+    # fire BEFORE any Lighthouse / Chrome resolution work happens. Validation
+    # before side effects: the exit code is the contract.
+    proc = subprocess.run(
+        [
+            node,
+            str(WORKER_SCRIPT),
+            "--port=0",
+            "--url=http://127.0.0.1:1/",
+            "--form-factor=tablet",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+    )
+    assert proc.returncode == 1, (
+        f"expected exit 1 on invalid form-factor; got {proc.returncode} "
+        f"with stderr={proc.stderr[:300]!r}"
+    )
+    # Clean stderr message naming the bad value AND the valid set, NOT a
+    # Lighthouse deep-stack "Screen emulation" error.
+    assert "form-factor" in proc.stderr.lower()
+    assert "tablet" in proc.stderr
+    assert "mobile" in proc.stderr and "desktop" in proc.stderr
