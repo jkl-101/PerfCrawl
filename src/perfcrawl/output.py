@@ -134,11 +134,23 @@ def _build_csv_row(run: RunRecord, page: PageResult) -> dict[str, str]:
 
 
 def _atomic_write_text(target: Path, content: str) -> None:
-    """Write ``content`` to ``target`` atomically (tmp + os.replace).
+    """Write ``content`` to ``target`` with a rename-atomic publish step.
 
-    Mirrors store.py's ``with conn:`` transaction: the file either appears
-    whole at ``target`` or it doesn't appear at all. A crash mid-write never
-    leaves a half-written file at the consumer-visible path.
+    The consumer-visible path at ``target`` either points at the new content
+    or the old (or nothing, if the target didn't exist before) — never at a
+    half-written tmp file. This is the rename-atomicity guarantee
+    ``os.replace`` provides on a single POSIX filesystem; mirrors store.py's
+    ``with conn:`` transaction at the file-I/O layer.
+
+    IN-05 / atomicity scope: ``os.replace`` makes the *rename* atomic from
+    the consumer's perspective, but the actual on-disk page-cache flush is
+    NOT fsync'd. Across a power loss between ``os.replace`` and the kernel
+    flushing dirty pages, the on-disk directory entry can point at a data
+    extent that hasn't been written yet — the visible file could be the new
+    metadata over old or zero data. For local-dev artifacts on a developer's
+    laptop this is the right tradeoff (the extra fsync cost outweighs the
+    durability win for ephemeral run outputs); the SQLite store
+    (``store.py``) handles its own durability path independently.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     # delete=False so we own the lifecycle; suffix differs from the final name
