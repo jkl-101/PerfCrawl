@@ -30,14 +30,32 @@ def _check_version(lhr: dict) -> None:
     failure mode where someone upgrades to 14.0 without updating the parser).
     Mirrors the model-layer fail-loud invariant from PageResult.allow_inf_nan
     (WR-01): silent corruption is the worst-case outcome, so raise here.
+
+    IN-04: normalize three soft edges of the raw ``lighthouseVersion`` value
+    so the gate fails LOUD (ValueError) and CLEAR in every case:
+
+      - ``None`` (key present, null value) used to raise ``AttributeError``
+        on ``.startswith`` — the CLI's ``except`` arms don't catch that, so
+        the user saw a bare traceback instead of the "version mismatch"
+        message D-10 advertises. Normalize None to "" first.
+      - ``"v13.3.0"`` (a v-prefixed valid version) used to fail the major
+        check even though the major matches. Strip a leading ``"v"`` so the
+        gate accepts the equivalent form.
+      - ``"  13.3.0  "`` (surrounding whitespace) used to fail for the same
+        reason. ``.strip()`` away.
+
+    Pre-release tags (``"13.3.0-beta.1"``) continue to be accepted on the
+    correct major — they share the audit shape with the GA release.
     """
-    actual = lhr.get("lighthouseVersion", "")
+    raw = lhr.get("lighthouseVersion")
+    actual = (raw or "").lstrip("v").strip()
     if not actual.startswith(EXPECTED_LIGHTHOUSE_MAJOR + "."):
         raise ValueError(
             f"Lighthouse version mismatch: expected major "
-            f"{EXPECTED_LIGHTHOUSE_MAJOR}.x, got {actual!r}. Normalizer is "
-            f"locked to LH {EXPECTED_LIGHTHOUSE_MAJOR}.x audit shape; "
-            f"refusing to silently produce a corrupted PageResult."
+            f"{EXPECTED_LIGHTHOUSE_MAJOR}.x, got {actual!r} (from "
+            f"lighthouseVersion={raw!r}). Normalizer is locked to LH "
+            f"{EXPECTED_LIGHTHOUSE_MAJOR}.x audit shape; refusing to "
+            f"silently produce a corrupted PageResult."
         )
 
 
