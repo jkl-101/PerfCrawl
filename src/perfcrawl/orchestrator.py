@@ -233,7 +233,9 @@ def measure_url(
                         per_sample_results.append(page_result)
                         if lhr_for_metadata is None:
                             lhr_for_metadata = lhr
-                        if first_raw_report is None:
+                        if first_raw_report is None and (
+                            lh.get("reportJson") or lh.get("reportHtml")
+                        ):
                             # OUT-03 side-channel: stash the FIRST successful
                             # sample's reportJson + reportHtml strings for the
                             # CLI's output.write_outputs to land on disk.
@@ -241,6 +243,16 @@ def measure_url(
                             # signal; output.py treats falsy strings as "no
                             # artifact" so a malformed envelope produces a
                             # missing file rather than a zero-byte one.
+                            # WR-12: gate the sentinel update on the *payload*,
+                            # not just on the sentinel state. If sample 1's
+                            # envelope returns empty strings (both fields
+                            # falsy), do NOT lock in the empty tuple — let a
+                            # later successful sample's real payload win the
+                            # FIRST-with-artifact slot. Without this guard, a
+                            # malformed first envelope silently discards every
+                            # subsequent sample's payload because the
+                            # downstream WR-04 truthiness skip drops both file
+                            # writes for ``("", "")``.
                             first_raw_report = (
                                 lh.get("reportJson") or "",
                                 lh.get("reportHtml") or "",
