@@ -636,7 +636,14 @@ def test_user_error_on_bad_emulation(monkeypatch):
 
 def test_runrecord_metadata_stamping(monkeypatch):
     """RUN-02 + D-04: RunRecord is stamped with chrome_version, lighthouse_version,
-    throttling, and emulation from the first successful sample's lhr."""
+    throttling, and emulation from the first successful sample's lhr.
+
+    IN-03: ``chrome_version`` is the parsed version triple (e.g. "137.0.7151.40"),
+    NOT the full ~100-character User-Agent string. The pre-fix shape stored
+    ``lhr["environment"]["hostUserAgent"]`` verbatim, which surfaced an
+    unreadable UA in the column downstream consumers (CSV ``chrome_version``,
+    Phase 6 Sheets exporter) expect a version triple in.
+    """
     from perfcrawl.orchestrator import measure_url
     import perfcrawl.orchestrator as orch
 
@@ -646,11 +653,46 @@ def test_runrecord_metadata_stamping(monkeypatch):
     run_record, _ = measure_url(
         url="https://example.com/", samples=1, emulation="desktop"
     )
-    assert run_record.chrome_version is not None
-    assert "Chrome/137.0.7151.40" in run_record.chrome_version
+    # IN-03: exact equality on the parsed version triple, not substring match.
+    assert run_record.chrome_version == "137.0.7151.40", (
+        f"chrome_version should be the parsed version triple, got "
+        f"{run_record.chrome_version!r}"
+    )
     assert run_record.lighthouse_version == "13.3.0"
     assert run_record.throttling == {"rttMs": 150, "cpuSlowdownMultiplier": 4}
     assert run_record.emulation == "desktop"
+
+
+def test_runrecord_metadata_chrome_version_none_when_ua_missing(monkeypatch):
+    """IN-03: when no ``Chrome/<ver>`` token is in the UA, chrome_version is None.
+
+    Defensive: if a future LH version drops ``hostUserAgent`` or surfaces a
+    non-Chrome UA (Headless Shell only? Future Brave headless?), the column
+    becomes None rather than carrying a garbled UA fragment.
+    """
+    from perfcrawl.orchestrator import measure_url
+    import perfcrawl.orchestrator as orch
+
+    def _stub_lhr_no_chrome_in_ua() -> dict:
+        base = _stub_lhr()
+        base["environment"]["hostUserAgent"] = "Mozilla/5.0 (X11; Linux x86_64)"
+        return base
+
+    _install_orchestrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orch,
+        "run_one_sample",
+        lambda **kw: {
+            "lhr": _stub_lhr_no_chrome_in_ua(),
+            "reportJson": "{}",
+            "reportHtml": "<html></html>",
+        },
+    )
+
+    run_record, _ = measure_url(
+        url="https://example.com/", samples=1, emulation="mobile"
+    )
+    assert run_record.chrome_version is None
 
 
 # ---------------------------------------------------------------------------
