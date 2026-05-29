@@ -89,15 +89,20 @@ try {
   // Pitfall 6: result.report is a 2-element array because flags.output is
   // ['json', 'html']. Destructure before serializing.
   const [reportJson, reportHtml] = result.report;
-  process.stdout.write(
-    JSON.stringify({
-      lhr: result.lhr,
-      reportJson,
-      reportHtml,
-    }),
-  );
+  const payload = JSON.stringify({ lhr: result.lhr, reportJson, reportHtml });
+  // CR-01: drain stdout before exiting. Real LH payloads are 200KB-2MB; the
+  // kernel pipe buffer is ~64KB on Linux, so a synchronous process.exit()
+  // after stdout.write() truncates the JSON. Callback form guarantees the
+  // kernel finishes the drain before the worker process terminates.
   clearTimeout(watchdog);
-  process.exit(0);
+  process.stdout.write(payload, (err) => {
+    if (err) {
+      process.stderr.write(`worker error: stdout write failed: ${err.message}\n`);
+      process.exit(1);
+    }
+    process.exit(0);
+  });
+  // Do NOT call process.exit synchronously after this point.
 } catch (err) {
   process.stderr.write(`worker error: ${err.message}\n`);
   clearTimeout(watchdog);
