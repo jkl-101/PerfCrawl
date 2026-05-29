@@ -196,6 +196,43 @@ def test_version_gate_rejects_major_drift(lh_version_14_drift):
     assert "13" in msg
 
 
+@pytest.mark.parametrize(
+    "version_value,should_accept",
+    [
+        (None, False),               # IN-04: None must raise ValueError, NOT AttributeError
+        ("", False),                 # IN-04: empty string is a major mismatch
+        ("v13.3.0", True),           # IN-04: v-prefix is normalized away
+        ("  13.3.0  ", True),        # IN-04: whitespace is normalized away
+        ("13.3.0", True),            # Sanity: plain valid form still accepted
+        ("13.3.0-beta.1", True),     # IN-04: pre-release tag on major 13 accepted
+        ("14.0.0", False),           # Sanity: major drift still rejected
+        ("v14.0.0", False),          # IN-04: v-prefixed major drift rejected
+    ],
+)
+def test_check_version_normalizes_input(version_value, should_accept):
+    """IN-04: ``_check_version`` normalizes whitespace + ``v`` prefix, raises ValueError on None.
+
+    Pre-fix: ``lhr.get("lighthouseVersion", "")`` returned an empty string for a
+    missing key but ``None`` when the key was present with a null value. The
+    subsequent ``actual.startswith(...)`` then raised ``AttributeError`` on
+    ``None`` — breaking D-10's "fail loud, fail clear" contract because the
+    CLI's ``except`` arms catch ``ValueError`` / ``MeasurementError``, NOT
+    ``AttributeError``.
+
+    Post-fix shape: ``(lhr.get("lighthouseVersion") or "").lstrip("v").strip()``
+    normalizes None / "" / leading-v / surrounding-whitespace into a clean
+    major-comparable string. Major-drift still raises ValueError as before.
+    """
+    from perfcrawl.normalizer import _check_version
+
+    minimal_lhr = {"lighthouseVersion": version_value}
+    if should_accept:
+        _check_version(minimal_lhr)  # must not raise
+    else:
+        with pytest.raises(ValueError):
+            _check_version(minimal_lhr)
+
+
 # --- D-13: partial result on non-2xx ----------------------------------------
 
 
