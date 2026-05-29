@@ -25,8 +25,13 @@ import { parseArgs } from "node:util";
 // --- A5: self-terminate watchdog (defense-in-depth for D-14) ----------------
 const WATCHDOG_MS = 55_000;
 const watchdog = setTimeout(() => {
-  process.stderr.write(`worker error: self-terminated after ${WATCHDOG_MS}ms watchdog\n`);
-  process.exit(1);
+  // IN-07: callback-form stderr write so the kernel finishes draining the
+  // error line before the worker terminates. Mirrors the CR-01 drain-before-
+  // exit pattern at the watchdog site for stderr consistency.
+  process.stderr.write(
+    `worker error: self-terminated after ${WATCHDOG_MS}ms watchdog\n`,
+    () => process.exit(1),
+  );
 }, WATCHDOG_MS);
 // Don't keep the event loop alive on the watchdog alone.
 watchdog.unref?.();
@@ -94,17 +99,30 @@ try {
   // kernel pipe buffer is ~64KB on Linux, so a synchronous process.exit()
   // after stdout.write() truncates the JSON. Callback form guarantees the
   // kernel finishes the drain before the worker process terminates.
-  clearTimeout(watchdog);
+  // IN-08: clearTimeout(watchdog) used to run BEFORE process.stdout.write,
+  // which defeated the A5 defense-in-depth — the watchdog was specifically
+  // there to fire if the longest-running operation (the payload write) hung
+  // past the budget. Move clearTimeout INSIDE the callback so the watchdog's
+  // lease covers the write itself; if the consumer dies mid-write and the
+  // callback never fires, the timer still fires.
   process.stdout.write(payload, (err) => {
+    clearTimeout(watchdog);
     if (err) {
-      process.stderr.write(`worker error: stdout write failed: ${err.message}\n`);
-      process.exit(1);
+      // IN-07: callback-form stderr drain on the error branch too.
+      process.stderr.write(
+        `worker error: stdout write failed: ${err.message}\n`,
+        () => process.exit(1),
+      );
+      return;
     }
     process.exit(0);
   });
   // Do NOT call process.exit synchronously after this point.
 } catch (err) {
-  process.stderr.write(`worker error: ${err.message}\n`);
   clearTimeout(watchdog);
-  process.exit(1);
+  // IN-07: callback-form stderr drain on the top-level error branch too.
+  process.stderr.write(
+    `worker error: ${err.message}\n`,
+    () => process.exit(1),
+  );
 }
