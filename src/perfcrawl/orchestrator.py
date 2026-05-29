@@ -115,9 +115,18 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
                     continue
                 return proc, port, user_data_dir
 
-    # Timeout: never wrote the file. Kill Chrome before raising so the caller's
-    # finally cleanup is not the only line of defense.
+    # Timeout: never wrote the file. CR-02 + CR-03: kill Chrome, wait to reap
+    # so it never becomes a <defunct> zombie, then remove the user_data_dir
+    # tempdir BEFORE raising. The caller's `chrome, port, user_data_dir = ...`
+    # assignment never completes when we raise, so the caller's finally cannot
+    # clean up — this launcher must be self-contained on its failure path.
     proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Already SIGKILL'd; the kernel will reap eventually.
+        pass
+    shutil.rmtree(user_data_dir, ignore_errors=True)
     raise MeasurementError(
         f"Chrome did not write DevToolsActivePort within {DEVTOOLS_PORT_FILE_TIMEOUT_S}s"
     )
@@ -243,11 +252,19 @@ def measure_url(
             )
             return run_record, raw_artifacts
     finally:
-        # T-02-03-Z: kill Chrome + rmtree the user_data_dir on BOTH success
-        # and failure paths. ignore_errors=True so a partial-cleanup failure
-        # doesn't mask the original exception.
+        # T-02-03-Z: kill Chrome + reap the exit status + rmtree the
+        # user_data_dir on BOTH success and failure paths. CR-02: without
+        # the wait() the killed Chromium stays a <defunct> zombie in the
+        # process table until the Python interpreter exits.
+        # ignore_errors=True on rmtree so a partial-cleanup failure doesn't
+        # mask the original exception.
         try:
             chrome.kill()
+            try:
+                chrome.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Already SIGKILL'd; the kernel will reap eventually.
+                pass
         except Exception:
             pass
         shutil.rmtree(user_data_dir, ignore_errors=True)
