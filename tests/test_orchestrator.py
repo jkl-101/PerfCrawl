@@ -198,6 +198,68 @@ def test_measure_url_returns_run_record_and_raw_artifacts(monkeypatch):
     assert raw_artifacts[page.url_key] == ("{}", "<html></html>")
 
 
+def test_first_raw_report_prefers_nonempty_payload_over_empty_sentinel(monkeypatch):
+    """WR-12: a malformed first envelope (empty ``reportJson`` / ``reportHtml``)
+    must NOT permanently shadow a later sample's real payload.
+
+    Pre-fix shape:
+
+        if first_raw_report is None:
+            first_raw_report = (
+                lh.get("reportJson") or "",
+                lh.get("reportHtml") or "",
+            )
+
+    Once ``first_raw_report`` becomes ``("", "")`` from a stripped-down envelope,
+    no later successful sample replaces it. Combined with the WR-04 truthiness
+    guard in ``output.write_outputs``, the resulting empty-string tuple causes
+    BOTH the ``.json`` and ``.html`` writes to be silently skipped — the user
+    loses ``lighthouse/<slug>.{json,html}`` even though sample 2 captured a
+    valid full payload in memory.
+
+    Pin: two samples, sample 1's envelope has empty payload strings (but a
+    valid ``lhr``), sample 2's envelope has real payload strings. Assert that
+    ``raw_artifacts[url_key]`` contains sample 2's bytes, not sample 1's empties.
+    """
+    from perfcrawl.canonical import canonical_key
+    from perfcrawl.orchestrator import measure_url
+    import perfcrawl.orchestrator as orch
+
+    _install_orchestrator_stubs(monkeypatch)
+
+    call_count = {"n": 0}
+
+    def _staged(**kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Sample 1: lhr present (so normalize_lh succeeds and the sample
+            # counts), but payload strings are empty — the malformed-envelope
+            # edge case WR-12 protects against.
+            return {"lhr": _stub_lhr(), "reportJson": "", "reportHtml": ""}
+        # Sample 2 onwards: real payload.
+        return _stub_worker_envelope()
+
+    monkeypatch.setattr(orch, "run_one_sample", _staged)
+
+    run_record, raw_artifacts = measure_url(
+        url="https://example.com/", samples=2, emulation="mobile"
+    )
+
+    page = run_record.pages[0]
+    url_key = canonical_key("https://example.com/")
+    assert url_key in raw_artifacts, "expected an artifacts entry for the page"
+    # The captured payload must be sample 2's real bytes, NOT sample 1's empties.
+    report_json, report_html = raw_artifacts[url_key]
+    assert report_json == "{}", (
+        f"WR-12 regression: orchestrator captured sample 1's empty reportJson "
+        f"and discarded sample 2's payload (got {report_json!r})"
+    )
+    assert report_html == "<html></html>", (
+        f"WR-12 regression: orchestrator captured sample 1's empty reportHtml "
+        f"and discarded sample 2's payload (got {report_html!r})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # RUN-03: cold cache via fresh BrowserContext per sample
 # ---------------------------------------------------------------------------
