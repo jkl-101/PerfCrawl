@@ -80,7 +80,20 @@ def _render_human_table(run, *, samples: int, run_dir: Path) -> None:
 
     The Phase 2 single-URL contract means we always render exactly one page.
     Phase 3 multi-page rendering will iterate run.pages with a "Page" column.
+
+    IN-02: defensive guard against a zero-page RunRecord. The orchestrator
+    currently guarantees ``len(run.pages) >= 1`` (it raises MeasurementError
+    when all samples fail), but a future Phase 3 regression that returns an
+    empty-pages RunRecord (e.g. multi-page crawl where every page failed but
+    the RunRecord was still constructed) would otherwise crash here with a
+    bare ``IndexError``. Surface a clean notice instead.
     """
+    if not run.pages:
+        out_console.print(
+            f"[yellow]No pages measured for {run.target}[/yellow] · "
+            f"written to {run_dir}"
+        )
+        return
     page = run.pages[0]
     table = Table(title=f"perfcrawl: {run.target}")
     table.add_column("Metric", style="bold")
