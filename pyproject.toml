@@ -7,8 +7,13 @@ requires-python = ">=3.12"
 dependencies = [
     "playwright>=1.60,<2",
     "pydantic>=2.10,<3",
+    "rich>=13",
+    "typer>=0.15",
     "w3lib>=2.3,<3",
 ]
+
+[project.scripts]
+perfcrawl = "perfcrawl.cli:app"
 
 [dependency-groups]
 dev = [
@@ -23,7 +28,7 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
 markers = [
     "e2e: end-to-end test requiring Node + Chrome + network (opt-in; skipped by default in CI)",
 ]
