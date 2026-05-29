@@ -19,7 +19,7 @@ instead of in week-3 of cross-run regression debugging.
 """
 
 from perfcrawl.canonical import canonical_key
-from perfcrawl.constants import ALWAYS_INCLUDE_AUDITS, EXPECTED_LIGHTHOUSE_MAJOR_MINOR
+from perfcrawl.constants import ALWAYS_INCLUDE_AUDITS, EXPECTED_LIGHTHOUSE_MAJOR
 from perfcrawl.models import MetricSample, PageResult, WaterfallEntry
 
 
@@ -32,13 +32,12 @@ def _check_version(lhr: dict) -> None:
     (WR-01): silent corruption is the worst-case outcome, so raise here.
     """
     actual = lhr.get("lighthouseVersion", "")
-    expected_major = EXPECTED_LIGHTHOUSE_MAJOR_MINOR.split(".")[0]
-    if not actual.startswith(expected_major + "."):
+    if not actual.startswith(EXPECTED_LIGHTHOUSE_MAJOR + "."):
         raise ValueError(
-            f"Lighthouse version mismatch: expected major {expected_major}.x, "
-            f"got {actual!r}. Normalizer is locked to LH "
-            f"{EXPECTED_LIGHTHOUSE_MAJOR_MINOR} audit shape; refusing to "
-            f"silently produce a corrupted PageResult."
+            f"Lighthouse version mismatch: expected major "
+            f"{EXPECTED_LIGHTHOUSE_MAJOR}.x, got {actual!r}. Normalizer is "
+            f"locked to LH {EXPECTED_LIGHTHOUSE_MAJOR}.x audit shape; "
+            f"refusing to silently produce a corrupted PageResult."
         )
 
 

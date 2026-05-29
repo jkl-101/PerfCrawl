@@ -132,7 +132,7 @@ def test_constants_module_declares_phase2_tunables():
         DEFAULT_SAMPLES_N,
         DEVTOOLS_PORT_FILE_TIMEOUT_S,
         DEVTOOLS_PORT_POLL_INTERVAL_S,
-        EXPECTED_LIGHTHOUSE_MAJOR_MINOR,
+        EXPECTED_LIGHTHOUSE_MAJOR,
         INP_PROXY_DISPLAY_LABEL,
         PER_SAMPLE_TIMEOUT_S,
         ExitCode,
@@ -142,8 +142,9 @@ def test_constants_module_declares_phase2_tunables():
     assert PER_SAMPLE_TIMEOUT_S == 60
     # D-08 + Claude's discretion: odd-N default for median friendliness
     assert DEFAULT_SAMPLES_N == 3
-    # D-10: normalizer version gate (bumped when worker's package-lock.json bumps)
-    assert EXPECTED_LIGHTHOUSE_MAJOR_MINOR == "13.x"
+    # D-10: normalizer version gate (bumped when worker's package-lock.json bumps).
+    # WR-02: the gate is major-only by design; the constant name now matches.
+    assert EXPECTED_LIGHTHOUSE_MAJOR == "13"
     # D-11: human-summary column header for the TBT proxy
     assert INP_PROXY_DISPLAY_LABEL == "INP (lab proxy, TBT-based)"
     # Pitfall 1 (Claude's discretion): DevToolsActivePort file polling
