@@ -63,7 +63,7 @@ Plans:
   4. The completed run is persisted to SQLite and written out as a flat one-row CSV and a full-fidelity JSON, and the raw Lighthouse JSON + HTML artifacts are saved per page
   5. The command is non-interactive and machine-readable (exit code + JSON output), runnable as an on-demand CLI
 
-**Plans**: 4 plans
+**Plans**: 5 plans (4 + 1 gap-closure)
 **UI hint**: yes
 Plans:
 **Wave 1**
@@ -78,6 +78,10 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 02-04-PLAN.md — Typer CLI + Rich human table + --json + SQLite persistence + on-disk CSV/JSON/raw-LH writers + e2e smoke (OUT-03, OUT-04, CLI-01)
+
+**Wave 4 — gap closure** *(post-verification: closes CR-01/02/03 from 02-REVIEW.md and turns the real e2e green)*
+
+- [x] 02-05-PLAN.md — CR-01 worker stdout drain + CR-02 reap-on-kill + CR-03 launcher self-cleanup + real-subprocess 1.5MB regression + real e2e green against https://example.com (restores end-to-end-verified status for METRIC-01..05, RUN-01..04, OUT-03, OUT-04, CLI-01)
 
 ### Phase 3: Site-Wide Crawler
 
