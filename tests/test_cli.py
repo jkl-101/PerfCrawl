@@ -29,7 +29,10 @@ from perfcrawl.constants import ExitCode, INP_PROXY_DISPLAY_LABEL
 from perfcrawl.models import MetricSample, PageResult, RunRecord
 from perfcrawl.orchestrator import MeasurementError, UserError
 
-runner = CliRunner(mix_stderr=False)
+# Newer Click (>=8.2 via Typer 0.26+) split stdout/stderr by default and
+# dropped the ``mix_stderr`` kwarg; ``result.stdout`` and ``result.stderr``
+# are now separate streams without an opt-in flag.
+runner = CliRunner()
 
 
 # --------------------------------------------------------------------------- #
