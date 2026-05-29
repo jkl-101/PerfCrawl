@@ -226,6 +226,50 @@ def test_json_file_is_valid_json(sample_run: RunRecord, tmp_path: Path) -> None:
     assert len(data["pages"]) == len(sample_run.pages)
 
 
+def test_empty_raw_artifact_strings_skip_file_writes(
+    sample_run: RunRecord, tmp_path: Path
+) -> None:
+    """WR-04: empty-string reportJson/reportHtml must not produce zero-byte files.
+
+    The orchestrator stashes ``lh.get("reportJson", "")`` and ``lh.get(
+    "reportHtml", "")``. If a worker envelope is missing either key, the
+    default empty string previously survived the ``is not None`` guard and
+    wrote a zero-byte ``lighthouse/<slug>.{json,html}``. Downstream tooling
+    reading those artifacts then failed with a confusing "empty file" rather
+    than a missing file.
+
+    Assert: passing empty strings for both fields skips both writes (no
+    ``.json`` or ``.html`` under ``lighthouse/`` for the page).
+    """
+    page0 = sample_run.pages[0]
+    raw_artifacts = {page0.url_key: ("", "")}
+    run_dir = write_outputs(sample_run, output_dir=tmp_path, raw_artifacts=raw_artifacts)
+    lh_dir = run_dir / "lighthouse"
+    slug = page_slug(page0.url_key)
+    if lh_dir.exists():
+        # No artifact files for this page (zero-byte writes must be skipped).
+        for path in lh_dir.iterdir():
+            assert path.stem != slug, (
+                f"unexpected zero-byte artifact written for empty payload: {path}"
+            )
+
+
+def test_partial_raw_artifact_writes_only_present_payload(
+    sample_run: RunRecord, tmp_path: Path
+) -> None:
+    """WR-04: partial artifact (only JSON or only HTML present) writes just that file."""
+    page0 = sample_run.pages[0]
+    # JSON present, HTML empty
+    raw_artifacts = {page0.url_key: ('{"lhr":{}}', "")}
+    run_dir = write_outputs(sample_run, output_dir=tmp_path, raw_artifacts=raw_artifacts)
+    slug = page_slug(page0.url_key)
+    lh_dir = run_dir / "lighthouse"
+    json_path = lh_dir / f"{slug}.json"
+    html_path = lh_dir / f"{slug}.html"
+    assert json_path.exists(), "JSON artifact should be written"
+    assert not html_path.exists(), "empty HTML should be skipped, not zero-byte written"
+
+
 def test_csv_has_lf_only_line_endings(sample_run: RunRecord, tmp_path: Path) -> None:
     """WR-09: ``result.csv`` must have LF-only line endings, not CRLF.
 
