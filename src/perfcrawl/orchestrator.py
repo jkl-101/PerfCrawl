@@ -80,25 +80,40 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
     """
     user_data_dir = Path(tempfile.mkdtemp(prefix="perfcrawl-chrome-"))
 
-    # Resolve the Playwright-bundled Chromium executable. A brief sync_playwright()
-    # context gives us p.chromium.executable_path; we then close it and launch
-    # via Popen (Pitfall 5).
-    with sync_playwright() as p:
-        chrome_path = p.chromium.executable_path
+    # WR-11: structural sibling of CR-03. The original launcher leaked
+    # ``user_data_dir`` on three failure paths: (1) DevToolsActivePort timeout
+    # (CR-03 — fixed), (2) ``sync_playwright()`` raising (Playwright not
+    # installed, chromium binary not downloaded), and (3) ``subprocess.Popen``
+    # raising (chrome binary missing / not executable). Wrap the
+    # resolve-then-launch section in try/except so a raise from either
+    # uncovered path rmtree's the dir BEFORE re-raising. The caller's
+    # ``chrome, port, user_data_dir = ...`` assignment never completes on a
+    # raise, so the caller cannot clean up — the launcher is self-contained
+    # on its failure path (CR-03 invariant extended).
+    try:
+        # Resolve the Playwright-bundled Chromium executable. A brief
+        # sync_playwright() context gives us p.chromium.executable_path; we
+        # then close it and launch via Popen (Pitfall 5).
+        with sync_playwright() as p:
+            chrome_path = p.chromium.executable_path
 
-    argv = [
-        chrome_path,
-        f"--user-data-dir={user_data_dir}",
-        "--remote-debugging-port=0",
-        "--headless=new",
-        "--no-first-run",
-        "--no-default-browser-check",
-    ]
-    proc = subprocess.Popen(
-        argv,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        argv = [
+            chrome_path,
+            f"--user-data-dir={user_data_dir}",
+            "--remote-debugging-port=0",
+            "--headless=new",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        # Cleanup-on-raise: same disk-leak class as CR-03, same rmtree pattern.
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+        raise
 
     port_file = user_data_dir / "DevToolsActivePort"
     # WR-05: monotonic-deadline loop. Two improvements over the prior
