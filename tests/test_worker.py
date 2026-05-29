@@ -171,6 +171,39 @@ def test_worker_preflight_succeeds_when_node_modules_present(tmp_path):
     preflight(worker_dir=fake_worker_dir)
 
 
+def test_worker_preflight_raises_when_node_binary_missing(tmp_path, monkeypatch):
+    """WR-01: missing ``node`` on PATH → MeasurementError with actionable guidance.
+
+    Previously ``preflight()`` only verified the lighthouse-worker
+    ``node_modules`` install — a missing ``node`` binary itself surfaced as
+    an uncaught ``FileNotFoundError`` from ``subprocess.run(["node", ...])``
+    later in ``run_one_sample``, which the orchestrator's
+    ``except subprocess.TimeoutExpired`` did not catch. The traceback bubbled
+    up and violated the D-15 three-exit-code contract.
+
+    Preflight should detect this fast and raise ``MeasurementError`` with a
+    "install Node >=22.19" hint so the CLI maps to ``ExitCode.MEASUREMENT_ERROR``
+    cleanly (CLAUDE.md § Installation).
+    """
+    from perfcrawl.lighthouse_worker import MeasurementError, preflight
+
+    # Make a valid worker dir so the node_modules check passes (we want to
+    # isolate the node-binary missing path).
+    fake_worker_dir = tmp_path / "lighthouse-worker"
+    pkg_dir = fake_worker_dir / "node_modules" / "lighthouse"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "package.json").write_text('{"name":"lighthouse","version":"13.3.0"}')
+
+    # Pretend ``node`` is not on PATH.
+    monkeypatch.setattr("shutil.which", lambda binary: None if binary == "node" else "/x")
+    with pytest.raises(MeasurementError) as exc_info:
+        preflight(worker_dir=fake_worker_dir)
+    msg = str(exc_info.value)
+    assert "node" in msg.lower()
+    # Hint mentions the install requirement (CLAUDE.md § Installation cites Node >=22.19).
+    assert "22" in msg or "install" in msg.lower()
+
+
 def test_worker_script_path_resolves_to_repo_root_sibling():
     """WORKER_SCRIPT points at <repo>/lighthouse-worker/run.mjs regardless of cwd."""
     from perfcrawl.lighthouse_worker import WORKER_SCRIPT
