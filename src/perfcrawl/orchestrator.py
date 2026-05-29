@@ -26,6 +26,7 @@ Security (RESEARCH § Security Domain):
   (T-02-03-PARTIAL).
 """
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -271,9 +272,17 @@ def measure_url(
             # sample's lhr. Defensive .get() chains so a missing key yields None
             # rather than raising (the slot is nullable on RunRecord).
             assert lhr_for_metadata is not None  # guaranteed by per_sample_results check
-            chrome_version = (
-                lhr_for_metadata.get("environment", {}).get("hostUserAgent")
-            )
+            # IN-03: ``chrome_version`` is the parsed version triple (e.g.
+            # "137.0.7151.40"), NOT the full ~100-character UA string. The
+            # pre-fix shape stored ``hostUserAgent`` verbatim, surfacing an
+            # unreadable UA in the column downstream consumers (CSV
+            # ``chrome_version``, Phase 6 Sheets exporter) expect a triple in.
+            # When no ``Chrome/<ver>`` token is in the UA (LH dropped the
+            # field, or a future non-Chrome headless), the value is None
+            # rather than a garbled fragment.
+            host_ua = lhr_for_metadata.get("environment", {}).get("hostUserAgent") or ""
+            _chrome_match = re.search(r"Chrome/(\S+)", host_ua)
+            chrome_version = _chrome_match.group(1) if _chrome_match else None
             lighthouse_version = lhr_for_metadata.get("lighthouseVersion")
             throttling = lhr_for_metadata.get("configSettings", {}).get("throttling")
 
