@@ -72,24 +72,43 @@ def run_one_sample(
         f"--form-factor={emulation}",
     ]
     try:
+        # WR-06: capture raw bytes (no ``text=True`` / ``encoding="utf-8"``)
+        # so a non-UTF-8 byte on stdout/stderr does NOT raise
+        # ``UnicodeDecodeError`` from inside subprocess.run — that exception
+        # was not caught by the ``except TimeoutExpired`` and bubbled up,
+        # violating the D-15 three-exit-code contract. Decode defensively
+        # with ``errors="replace"`` below; garbage stdout falls into the
+        # ``json.JSONDecodeError`` arm and returns None.
         proc = subprocess.run(
             argv,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired:
         # D-14 timeout branch: caller will retry once or drop the sample.
         return None
+    # Defensive decode: bytes -> str with replacement for non-UTF-8 sequences.
+    # The existing tests pass str via SimpleNamespace; tolerate both.
+    raw_stdout = proc.stdout if proc.stdout is not None else b""
+    raw_stderr = proc.stderr if proc.stderr is not None else b""
+    stdout = (
+        raw_stdout.decode("utf-8", errors="replace")
+        if isinstance(raw_stdout, (bytes, bytearray))
+        else raw_stdout
+    )
+    stderr = (
+        raw_stderr.decode("utf-8", errors="replace")
+        if isinstance(raw_stderr, (bytes, bytearray))
+        else raw_stderr
+    )
     if proc.returncode != 0:
         # D-15: surface worker stderr so the CLI's stderr passthrough renders
         # an actionable message. The CLI (02-04) maps the all-samples-fail
         # case to MEASUREMENT_ERROR; this line is the breadcrumb the user sees.
-        sys.stderr.write(f"worker error (exit {proc.returncode}): {proc.stderr}\n")
+        sys.stderr.write(f"worker error (exit {proc.returncode}): {stderr}\n")
         return None
     try:
-        return json.loads(proc.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError:
         # Worker exited 0 but emitted garbage — treat as drop, same as a crash.
         return None
