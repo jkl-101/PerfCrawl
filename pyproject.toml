@@ -28,7 +28,7 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
 markers = [
     "e2e: end-to-end test requiring Node + Chrome + network (opt-in; skipped by default in CI)",
 ]
