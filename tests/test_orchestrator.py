@@ -116,16 +116,22 @@ class _FakePlaywrightCM:
 
 
 class _FakeChromeProc:
-    """Mocked subprocess.Popen — tracks kill() calls."""
+    """Mocked subprocess.Popen — tracks kill() and wait() calls.
+
+    CR-02 invariant: every kill() must be followed by wait() so the killed
+    process is reaped instead of becoming a <defunct> zombie. The ``waited``
+    flag lets tests assert the wait() call actually happens.
+    """
 
     def __init__(self) -> None:
         self.killed = False
+        self.waited = False
 
     def kill(self) -> None:
         self.killed = True
 
-    # Some implementations also call wait() after kill(); no-op safely.
     def wait(self, timeout: float | None = None) -> int:
+        self.waited = True
         return 0
 
 
@@ -299,6 +305,7 @@ def test_chrome_killed_on_success(monkeypatch):
 
     measure_url(url="https://example.com/", samples=1, emulation="mobile")
     assert chrome_proc.killed is True
+    assert chrome_proc.waited is True  # CR-02: must reap, not just kill
 
 
 def test_chrome_killed_on_failure(monkeypatch):
@@ -312,6 +319,7 @@ def test_chrome_killed_on_failure(monkeypatch):
     with pytest.raises(MeasurementError):
         measure_url(url="https://example.com/", samples=1, emulation="mobile")
     assert chrome_proc.killed is True
+    assert chrome_proc.waited is True  # CR-02: must reap on failure too
 
 
 def test_tempdir_cleaned_on_failure(monkeypatch, tmp_path):
@@ -324,12 +332,17 @@ def test_tempdir_cleaned_on_failure(monkeypatch, tmp_path):
     # Drop a marker file so we can prove the dir was removed.
     (user_data_dir / "marker").write_text("hi")
 
-    _install_orchestrator_stubs(monkeypatch, tmp_user_data_dir=user_data_dir)
+    _, chrome_proc, _ = _install_orchestrator_stubs(
+        monkeypatch, tmp_user_data_dir=user_data_dir
+    )
     monkeypatch.setattr(orch, "run_one_sample", lambda **kw: None)
 
     with pytest.raises(MeasurementError):
         measure_url(url="https://example.com/", samples=1, emulation="mobile")
     assert not user_data_dir.exists()
+    # CR-02: the kill in measure_url's finally must be followed by wait().
+    # _FakeChromeProc.waited flips True on .wait(timeout=...).
+    assert chrome_proc.waited is True
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +411,13 @@ def test_devtools_port_timeout_raises(monkeypatch, tmp_path):
     assert "DevToolsActivePort" in str(exc_info.value)
     # The fake Chrome process should have been killed on timeout.
     assert fake_proc.killed is True
+    # CR-02: launcher-side reap on the timeout path too.
+    assert fake_proc.waited is True
+    # CR-03: the launcher's failure path is self-contained — the freshly
+    # created user_data_dir must be removed BEFORE the raise propagates,
+    # because the caller's `chrome, port, user_data_dir = ...` assignment
+    # never completes and so the caller's finally cannot clean it up.
+    assert not user_data_dir.exists()
 
 
 # ---------------------------------------------------------------------------
