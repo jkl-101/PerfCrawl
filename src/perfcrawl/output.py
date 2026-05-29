@@ -209,6 +209,12 @@ def write_outputs(
     # Build the CSV content in-memory then write it atomically. csv.DictWriter
     # against a StringIO keeps the locked column order intact without a
     # mid-write window where result.csv would be half-populated.
+    #
+    # WR-09: Python's ``csv`` module always emits ``\r\n`` per RFC 4180, and
+    # StringIO does not apply newline translation. Without stripping the CR
+    # bytes here, naive consumers (jq, awk, gspread cell-upload, and any
+    # ``open(..., newline="\n")`` reader) see literal ``\r`` characters at
+    # end-of-row. Normalize to LF-only before the atomic write.
     import io  # local: only needed here, keeps the module surface tight
 
     buf = io.StringIO()
@@ -216,7 +222,8 @@ def write_outputs(
     writer.writeheader()
     for page in run_record.pages:
         writer.writerow(_build_csv_row(run_record, page))
-    _atomic_write_text(run_dir / "result.csv", buf.getvalue())
+    csv_content = buf.getvalue().replace("\r\n", "\n")
+    _atomic_write_text(run_dir / "result.csv", csv_content)
 
     # --- lighthouse/<slug>.{json,html} ---
     if raw_artifacts:
