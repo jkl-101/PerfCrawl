@@ -12,8 +12,13 @@ dependencies = [
     "w3lib>=2.3,<3",
 ]
 
-[project.scripts]
-perfcrawl = "perfcrawl.cli:app"
+# WR-10: ``[project.scripts]`` deliberately omitted. PerfCrawl ships a
+# repo-checkout-only workflow today — the Node ``lighthouse-worker/`` lives as
+# a sibling of ``src/`` and is NOT bundled into the wheel, so a
+# ``pip install perfcrawl`` produced binary would point at a path that does
+# not exist. Run from a checkout via ``uv run python -m perfcrawl.cli`` (or
+# equivalent) until Phase 3 makes the worker location configurable
+# (PERFCRAWL_WORKER_DIR env / CLI flag).
 
 [dependency-groups]
 dev = [

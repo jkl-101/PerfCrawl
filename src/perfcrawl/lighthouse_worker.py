@@ -148,6 +148,21 @@ def preflight(worker_dir: Path | None = None) -> None:
         )
     if worker_dir is None:
         worker_dir = WORKER_SCRIPT.parent
+    # WR-10: ``WORKER_SCRIPT`` is computed as
+    # ``Path(__file__).resolve().parents[2] / "lighthouse-worker" / "run.mjs"``
+    # which only resolves correctly under a repo checkout (where the
+    # ``lighthouse-worker/`` sibling exists). A wheel/pip install resolves
+    # ``parents[2]`` to the Python ``lib/`` directory and the worker dir does
+    # not exist at all. Distinguish the two failure modes so the user gets an
+    # actionable message rather than a "node_modules/lighthouse missing"
+    # error that points at a path they can't fix.
+    if not worker_dir.exists():
+        raise MeasurementError(
+            f"lighthouse-worker directory not found at {worker_dir} — "
+            "PerfCrawl is currently a repo-checkout-only tool (the Node "
+            "worker is not bundled into the wheel). Run from a clone of "
+            "the repository via `uv run` (see README § Development)."
+        )
     marker = worker_dir / "node_modules" / "lighthouse" / "package.json"
     if not marker.exists():
         raise MeasurementError(
