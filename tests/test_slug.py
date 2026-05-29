@@ -86,6 +86,30 @@ def test_max_len_truncation():
     assert len(page_slug(long_url, max_len=20)) <= 20
 
 
+def test_truncation_does_not_leave_trailing_dot():
+    """WR-07: truncation must never leave a trailing '.', '_', or '-' (Windows-invalid).
+
+    After ``stem = stem.strip("._-")`` removes leading/trailing separators, the
+    final ``stem[:max_len]`` slice can re-introduce a trailing separator if the
+    character at position max_len-1 happens to be one. Windows rejects
+    filenames ending in '.' or whitespace; rstrip the same set after truncation
+    as the strip applied before.
+
+    Concrete repro: the URL below produces an intermediate stem
+    ``"x.com_" + ("a"*73) + ".bb"`` (length 82). Slicing to ``max_len=80``
+    drops the trailing ``"bb"`` and leaves a trailing ``"."`` — a Windows-
+    invalid filename.
+    """
+    url = "https://x.com/" + ("a" * 73) + ".bb"
+    slug = page_slug(url, max_len=80)
+    assert not slug.endswith("."), f"slug ends with dot: {slug!r}"
+    assert not slug.endswith("_"), f"slug ends with underscore: {slug!r}"
+    assert not slug.endswith("-"), f"slug ends with hyphen: {slug!r}"
+    # The post-rstrip slug must still be non-empty (the "_" fallback applies
+    # only if every char in the [:max_len] window is a separator).
+    assert len(slug) > 0
+
+
 @pytest.mark.parametrize(
     "bizarre",
     ["", "://broken", "http://", " \t\n", "\x00\x01\x02", "...", "....////"],
