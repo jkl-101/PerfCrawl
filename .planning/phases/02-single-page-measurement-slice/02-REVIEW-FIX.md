@@ -1,272 +1,306 @@
 ---
 phase: 02-single-page-measurement-slice
-fixed_at: 2026-05-29T14:36:17Z
+fixed_at: 2026-05-29T15:35:00Z
 review_path: .planning/phases/02-single-page-measurement-slice/02-REVIEW.md
-iteration: 1
-findings_in_scope: 11
-fixed: 10
+iteration: 2
+findings_in_scope: 10
+fixed: 9
 skipped: 1
 status: partial
 ---
 
-# Phase 02: Code Review Fix Report
+# Phase 02: Code Review Fix Report (iteration 2)
 
-**Fixed at:** 2026-05-29T14:36:17Z
+**Fixed at:** 2026-05-29T15:35:00Z
 **Source review:** `.planning/phases/02-single-page-measurement-slice/02-REVIEW.md`
-**Iteration:** 1
+**Iteration:** 2
 
 **Summary:**
 
-- Findings in scope (critical + warning): 11 (CR: 0, WR-01..11)
-- Fixed: 10
-- Skipped: 1
-- Default `uv run pytest -x` suite: 188 passed, 1 deselected (was 178 → +10 new
-  regression tests)
-- `uv run pytest -m e2e tests/test_e2e.py -x` (Node + Chrome + network): passed
-  in 13.40s
-- `uv run ruff check src/ tests/`: 26 pre-existing errors, no new errors
-  introduced by the fixes
+- Findings in scope (warning + info; `fix_scope: all`): 10 (WR-08, WR-12, IN-01..IN-08)
+- Fixed: 9 (WR-12, IN-01, IN-02, IN-03, IN-04, IN-05, IN-06, IN-07, IN-08 — IN-07 and IN-08 collapsed into one diff per reviewer note)
+- Skipped: 1 (WR-08 — TOCTOU deferred to Phase 3, same rationale as iteration 1)
+- Default `uv run pytest` suite: **199 passed, 1 skipped** (was 188 baseline; +11 attempted, of which 12 tests landed and one IN-01 test gracefully skips when `lighthouse-worker/node_modules` is absent)
+- `uv run pytest -m e2e tests/test_e2e.py -x` (Node + Chrome + network): **passed in 13.25s**
+- `uv run ruff check src/ tests/`: 29 errors (baseline at parent `83ec507` was 26; my changes add a couple of consistent `I001` test-function-local-import entries matching the codebase's existing pattern — no new error categories introduced)
 
 **Fix discipline:** every non-trivial fix landed as a TDD RED→GREEN pair (test
 commit asserts the defect, fix commit makes it pass). Trivial fixes
-(WR-03 docstring, WR-02 rename) landed as a single commit.
+(IN-05 docstring, IN-06 import-move, IN-07/IN-08 Node-runtime collapse) landed
+as a single commit.
+
+**WR-12 priority:** the highest-value fix in this pass — a real silent-data-loss
+bug introduced by iteration 1's WR-04 fix. Landed first so subsequent fixes
+operated on a clean base.
 
 ## Fixed Issues
 
-### WR-01: Missing `node` binary surfaces as uncaught `FileNotFoundError`, not `MeasurementError`
-
-**Files modified:** `src/perfcrawl/lighthouse_worker.py`, `tests/test_worker.py`
-**Commits:**
-- `159fce3` test(02): RED — preflight raises MeasurementError on missing node binary
-- `b4a63ea` fix(02): WR-01 — verify node binary on PATH in preflight()
-
-**Applied fix:** Added `shutil.which("node")` check at the top of `preflight()`,
-before the existing `node_modules/lighthouse/package.json` marker check. A
-missing `node` binary now raises `MeasurementError` with an actionable
-"install Node >=22.19" hint (CLAUDE.md § Installation), which the CLI's
-existing D-15 mapping turns into `ExitCode.MEASUREMENT_ERROR`. The regression
-test monkeypatches `shutil.which` to return `None` for `"node"` and asserts
-the `MeasurementError` shape.
-
----
-
-### WR-02: D-10 version gate ignores `.minor` portion of `EXPECTED_LIGHTHOUSE_MAJOR_MINOR`
-
-**Files modified:** `src/perfcrawl/constants.py`, `src/perfcrawl/normalizer.py`, `tests/test_slug.py`
-**Commit:** `b3f0c9d` fix(02): WR-02 — rename EXPECTED_LIGHTHOUSE_MAJOR_MINOR to EXPECTED_LIGHTHOUSE_MAJOR
-
-**Applied fix:** Renamed the constant to `EXPECTED_LIGHTHOUSE_MAJOR = "13"` so
-the name matches the gate's actual behavior (major-only). Simplified
-`_check_version` to `.startswith(EXPECTED_LIGHTHOUSE_MAJOR + ".")` instead of
-the `.split(".")[0]` indirection. Updated `tests/test_slug.py::test_constants_module_declares_phase2_tunables`
-to import and assert the new name. Module docstring + per-constant comment
-explain that minor-level pinning is intentionally not enforced because per-
-minor LH releases routinely keep audit shape backward-compatible — the
-proper escalation is bumping the major.
-
----
-
-### WR-03: Aggregator docstring claims `model_copy(update=...)` re-runs `_no_bare_inp`
-
-**Files modified:** `src/perfcrawl/aggregator.py`
-**Commit:** `803f63b` fix(02): WR-03 — correct aggregator docstring on model_copy validator semantics
-
-**Applied fix:** Corrected both the function docstring and the inline comment
-to match Pydantic v2's actual `model_copy` semantics — it copies field values
-into a new instance WITHOUT re-running `@model_validator(mode='after')`
-hooks. The defense-in-depth claim is reframed honestly: the model-layer
-`_no_bare_inp` floor enforces the invariant at `samples[0]`'s construction
-time, and the aggregator carries that already-validated shape forward.
-
----
-
-### WR-04: Empty `reportJson` / `reportHtml` strings written as zero-byte artifact files
-
-**Files modified:** `src/perfcrawl/output.py`, `src/perfcrawl/orchestrator.py`, `tests/test_output.py`
-**Commits:**
-- `6bd5f96` test(02): RED — skip zero-byte LH artifact files for empty payloads
-- `a52455d` fix(02): WR-04 — skip zero-byte LH artifact writes for empty payloads
-
-**Applied fix:** Tightened the guards in `output.write_outputs` from
-`if report_json is not None:` to `if report_json:` (truthiness), so empty
-strings no longer slip through and produce zero-byte files. Also tightened
-the orchestrator side (`orchestrator.py:213-216`) from
-`lh.get("reportJson", "")` to `lh.get("reportJson") or ""` so a `None`
-payload from a malformed envelope normalizes to falsy. Two new regression
-tests cover: (1) both fields empty → no files written; (2) JSON present
-but HTML empty → only `.json` written, `.html` skipped.
-
----
-
-### WR-05: `_launch_chrome_with_cdp_port` polling sleeps before first existence check
+### WR-12: Over-eager `first_raw_report` capture loses good artifacts after a malformed first sample
 
 **Files modified:** `src/perfcrawl/orchestrator.py`, `tests/test_orchestrator.py`
 **Commits:**
-- `fc80f4e` test(02): RED — port poller must check existence before sleeping
-- `b0afaaa` fix(02): WR-05 — monotonic-deadline port polling, check before sleep
+- `b4828a8` test(02): RED — WR-12 reject empty-payload sentinel capture
+- `cb0439f` fix(02): WR-12 — gate first_raw_report sentinel update on payload truthiness
 
-**Applied fix:** Replaced the `for _ in range(int(timeout/interval)):` loop
-with a monotonic-clock deadline loop that checks `port_file.exists()` BEFORE
-sleeping. Two improvements: (1) a file present at t=0 (fast machines) returns
-without paying one `DEVTOOLS_PORT_POLL_INTERVAL_S` wait; (2) drops the
-`int(...)` truncation that turned a 5.0s budget at 0.15s interval (33.33
-attempts) into 33. The existing `test_devtools_port_timeout_raises` test
-needed a `time.monotonic` monkeypatch added (fake clock jumps past deadline)
-so the test doesn't wait real wall-clock seconds.
+**Applied fix (Option A from review):** changed
+`if first_raw_report is None:` to
+`if first_raw_report is None and (lh.get("reportJson") or lh.get("reportHtml")):`
+so an empty-payload first envelope no longer wins the
+FIRST-with-artifact slot. A later sample with a real payload is captured
+instead — matches D-14 retry semantics. RED test runs a 2-sample scenario
+where sample 1 returns `{"lhr": {...}, "reportJson": "", "reportHtml": ""}`
+and sample 2 returns a full envelope; asserts `raw_artifacts[url_key]`
+contains sample 2's bytes. Pre-fix: test FAILS with `'' == '{}'` (sample
+1's empty captured, sample 2 discarded). Post-fix: passes.
 
 ---
 
-### WR-06: `subprocess.run(text=True, encoding="utf-8")` raises uncaught `UnicodeDecodeError`
+### IN-01: Worker doesn't validate `--form-factor` value
 
-**Files modified:** `src/perfcrawl/lighthouse_worker.py`, `tests/test_worker.py`
+**Files modified:** `lighthouse-worker/run.mjs`, `tests/test_worker.py`
 **Commits:**
-- `d957a79` test(02): RED — handle non-UTF-8 stdout/stderr without raise
-- `b6ca0d4` fix(02): WR-06 — capture stdout/stderr as bytes and decode with replacement
+- `b8256df` test(02): RED — IN-01 worker must reject invalid --form-factor cleanly
+- `a291259` fix(02): IN-01 — validate --form-factor at worker argv boundary
 
-**Applied fix:** Dropped `text=True, encoding="utf-8"` from the
-`subprocess.run` call so non-UTF-8 bytes on stdout/stderr no longer raise
-`UnicodeDecodeError` inside `subprocess.run` (an exception the `except
-TimeoutExpired` block did not catch). Decode the captured bytes defensively
-afterwards with `errors="replace"`. The existing test mocks that pass `str`
-via `SimpleNamespace` still work because the decode branch tolerates both
-`bytes` and pre-decoded `str` inputs. Two new regression tests cover
-non-UTF-8 stdout (returns None via the JSONDecodeError arm) and non-UTF-8
-stderr on a non-zero exit (still logged to sys.stderr without raising).
+**Applied fix:** added a `VALID_FORM_FACTORS = new Set(["mobile", "desktop"])`
+check BEFORE constructing the lighthouse config. Worker exits 1 with
+``worker error: --form-factor must be 'mobile' or 'desktop'; got "tablet"``
+instead of falling through to a confusing Lighthouse "Screen emulation does
+not match formFactor" deep-stack error. Defense in depth: both the Python
+orchestrator (UserError) AND the Node worker enforce the valid set
+independently. RED test invokes the actual `node run.mjs` with
+`--form-factor=tablet` and asserts exit-1 with the clean message; skipped
+gracefully when `node` or `lighthouse-worker/node_modules` is missing
+(matches the existing `test_worker_drains_large_stdout_payload` precedent).
 
 ---
 
-### WR-07: `page_slug` truncation can produce trailing-dot filename (Windows-invalid)
+### IN-02: `_render_human_table` indexes `run.pages[0]` without a defensive check
 
-**Files modified:** `src/perfcrawl/slug.py`, `tests/test_slug.py`
+**Files modified:** `src/perfcrawl/cli.py`, `tests/test_cli.py`
 **Commits:**
-- `102fd39` test(02): RED — regression for WR-07 trailing-dot truncation
-- `6e43aaa` fix(02): WR-07 — rstrip trailing separators after page_slug truncation
+- `5277372` test(02): RED — IN-02 CLI must not IndexError on zero-page RunRecord
+- `00448b9` fix(02): IN-02 — guard CLI table rendering against zero-page RunRecord
 
-**Applied fix:** Replaced `return stem[:max_len]` with
-`return stem[:max_len].rstrip("._-") or "_"`. The truncation can re-introduce
-a trailing separator if the character at position `max_len-1` happens to be
-one (e.g., the URL `https://x.com/aaa...a.bb` produces stem
-`x.com_aaa...a.bb` of length 82; slicing to 80 leaves a trailing `.`).
-The concrete RED test pins exactly this repro.
-
----
-
-### WR-09: `csv.DictWriter` emits `\r\n` line endings
-
-**Files modified:** `src/perfcrawl/output.py`, `tests/test_output.py`
-**Commits:**
-- `6774526` test(02): RED — assert LF-only line endings in result.csv
-- `03bdcdd` fix(02): WR-09 — normalize result.csv to LF-only line endings
-
-**Applied fix:** After building the CSV in a `StringIO` buffer, the assembled
-content is now normalized via `buf.getvalue().replace("\r\n", "\n")` before
-being passed to `_atomic_write_text`. RFC-4180 CRLF terminators no longer
-reach disk; downstream consumers (jq, awk, gspread cell-upload, naive
-`open(..., newline="\n")` readers) see LF-only line endings. The regression
-test reads `result.csv` in binary mode and asserts no `\r` byte appears.
+**Applied fix:** added an early-return guard at the top of
+`_render_human_table` — when `run.pages` is empty, print a yellow
+"No pages measured for {target} · written to {run_dir}" notice and return
+cleanly. The orchestrator currently guarantees ≥1 page (MeasurementError on
+all-samples-fail) but a future Phase 3 regression that returns an empty-pages
+RunRecord (multi-page crawl where every page failed) no longer crashes the CLI
+with a bare IndexError. RED test stubs `measure_url` to return
+`RunRecord(pages=[])` and asserts exit-0 with "No pages measured" in stdout.
 
 ---
 
-### WR-10: `WORKER_SCRIPT` path resolution breaks when perfcrawl is installed as a wheel
-
-**Files modified:** `pyproject.toml`, `src/perfcrawl/lighthouse_worker.py`, `README.md`
-**Commits:**
-- `5064f3c` fix(02): WR-10 — document repo-checkout-only, drop project.scripts, improve preflight message
-- `cae53f4` fix(02): WR-10 follow-up — restore project.scripts to keep editable install working
-
-**Applied fix:** Two-stage fix because the first stage broke the e2e test:
-
-1. **First commit** dropped `[project.scripts]` from pyproject.toml and added
-   a structured `MeasurementError` to `preflight()` that explicitly names the
-   wheel-install failure (`"lighthouse-worker directory not found at {path}
-   — PerfCrawl is currently a repo-checkout-only tool..."`) before falling
-   through to the generic `node_modules` error. README rewritten to make the
-   repo-checkout-only constraint explicit.
-2. **Follow-up commit** restored `[project.scripts]` because dropping it
-   broke the e2e test (`uv run perfcrawl ...`). Editable installs (`uv sync`
-   / `uv run`) DO resolve `WORKER_SCRIPT.parents[2]` correctly because the
-   working tree is on disk at the expected layout; the wheel failure case
-   remains documented in README + surfaced as the new `preflight()` error
-   message. Pyproject comment explains the rationale.
-
-**Note:** the full structural fix (option (b) in the review — make worker
-location configurable via `PERFCRAWL_WORKER_DIR` env / CLI flag) is
-deliberately deferred to Phase 3 per the review's recommendation. This
-phase's fix is the documentation + actionable preflight error route.
-
----
-
-### WR-11: Tempdir leak on Popen/Playwright failure inside `_launch_chrome_with_cdp_port`
+### IN-03: `chrome_version` is the full UA string, not the version triple
 
 **Files modified:** `src/perfcrawl/orchestrator.py`, `tests/test_orchestrator.py`
 **Commits:**
-- `6dd04cb` test(02): RED — launcher tempdir cleanup on Popen / sync_playwright failure
-- `9801bba` fix(02): WR-11 — cleanup user_data_dir on Popen / sync_playwright failure
+- `2f4f67f` test(02): RED — IN-03 chrome_version must be parsed version triple
+- `9197568` fix(02): IN-03 — parse Chrome/<ver> triple from UA, drop full UA
 
-**Applied fix:** Mirrors CR-03's self-contained cleanup pattern. Wrapped the
-section between `tempfile.mkdtemp` and the polling loop in a try/except that
-calls `shutil.rmtree(user_data_dir, ignore_errors=True)` before re-raising.
-Two new regression tests cover both uncovered paths: (1) `sync_playwright()`
-raising (Playwright not installed / chromium binary not downloaded); (2)
-`subprocess.Popen` raising (chrome binary missing / not executable). Both
-assert `not user_data_dir.exists()` after the raise.
+**Applied fix:** added `import re` to orchestrator.py and replaced the
+`hostUserAgent` verbatim-store with `re.search(r"Chrome/(\S+)", ua)` extraction.
+`chrome_version` is now the parsed triple (`"137.0.7151.40"`) instead of the
+100+-character UA. When the UA doesn't contain a `Chrome/<ver>` token (LH
+drops the field, future non-Chrome headless), `chrome_version` becomes `None`
+rather than a garbled UA fragment — a clean nullable default. Two RED tests:
+(1) updated `test_runrecord_metadata_stamping` from substring assertion to
+exact `== "137.0.7151.40"`; (2) new
+`test_runrecord_metadata_chrome_version_none_when_ua_missing` pins the
+None-fallback on a Linux-only UA without `Chrome/...`.
+
+---
+
+### IN-04: `_check_version` does not normalize whitespace / `v` prefix / `None`
+
+**Files modified:** `src/perfcrawl/normalizer.py`, `tests/test_normalizer.py`
+**Commits:**
+- `e925e49` test(02): RED — IN-04 _check_version must normalize None / v / whitespace
+- `48d9541` fix(02): IN-04 — normalize None / v-prefix / whitespace in _check_version
+
+**Applied fix:** `actual = (raw or "").lstrip("v").strip()` normalizes three
+soft edges into a clean major-comparable string:
+(1) `None` (key present, null value) used to raise `AttributeError` —
+bypassing the CLI's `except (UserError, MeasurementError)` arms — now raises
+ValueError per D-10's "fail loud, fail clear" contract;
+(2) `"v13.3.0"` (v-prefix) now accepted as the equivalent form;
+(3) `"  13.3.0  "` (surrounding whitespace) now accepted.
+The error message also surfaces the raw `lighthouseVersion` value (`raw!r`)
+so a user can tell whether the failure was a null payload or an actual
+major bump. RED test is a single parametrized test covering 8 cases
+(`None`/`""`/`"v13.3.0"`/`"  13.3.0  "`/`"13.3.0"`/`"13.3.0-beta.1"`/
+`"14.0.0"`/`"v14.0.0"`) — pre-fix the `None` case raises AttributeError;
+post-fix all 8 land on their expected ValueError-or-pass outcome.
+
+---
+
+### IN-05: `_atomic_write_text` doesn't fsync
+
+**Files modified:** `src/perfcrawl/output.py`
+**Commit:** `48e2778` fix(02): IN-05 — soften _atomic_write_text docstring on durability scope
+
+**Applied fix (cheap option from review):** softened the docstring to scope
+the guarantee to consumer-visible rename atomicity (`os.replace`) and
+explicitly call out that page-cache fsync is NOT performed. For local-dev
+artifacts on a developer's laptop the extra fsync cost isn't worth the
+durability win for ephemeral run outputs; the SQLite store (`store.py`)
+handles its own durability path independently. Docstring-only fix per
+the reviewer's framing — the stronger option (`fsync` on the fd + parent
+dir) is documented as the upgrade path if/when these artifacts become
+canonical persistence.
+
+---
+
+### IN-06: `import io` performed inside `write_outputs` (re-introduced by WR-09 fix)
+
+**Files modified:** `src/perfcrawl/output.py`
+**Commit:** `5d56d66` fix(02): IN-06 — move import io to module top of output.py
+
+**Applied fix (trivial):** moved `import io` from inside `write_outputs` to
+the module top alongside `import csv` / `import os` / `import tempfile`,
+and updated the inline comment to call out the Phase 1 LEARNINGS
+"imports at the top" convention. Stdlib imports are cached and free on
+subsequent calls; inline imports complicate static analysis and grep
+discovery for no real benefit.
+
+---
+
+### IN-07: Watchdog `setTimeout` writes to stderr without a drain callback (collapsed with IN-08)
+### IN-08: CR-01 fix clears the watchdog *before* the long-running `stdout.write`
+
+**Files modified:** `lighthouse-worker/run.mjs`
+**Commit:** `f2ffa11` fix(02): IN-07/IN-08 — preserve watchdog across stdout write; drain stderr on errors
+
+**Applied fix (single diff per reviewer note):** two related Node-runtime
+changes:
+
+1. **IN-08 (clearTimeout position):** moved `clearTimeout(watchdog)`
+   from BEFORE `process.stdout.write` to INSIDE the write callback. The
+   A5 defense-in-depth was specifically there to fire if the longest-running
+   operation (the payload write) hung past the budget; clearing the timer
+   BEFORE the write defeated the defense. Now the watchdog's lease covers
+   the write itself; if the consumer dies mid-write and the callback never
+   fires, the timer still fires.
+2. **IN-07 (stderr drain):** all three stderr-then-exit sites (watchdog
+   handler, write-callback error branch, top-level catch) now use the
+   callback form `process.stderr.write(msg, () => process.exit(1))`,
+   matching the CR-01 drain-before-exit pattern. Short error lines make
+   truncation unlikely but consistency wins.
+
+No RED test — verifying watchdog firing semantics in unit tests requires
+intercepting `process.stdout.write`'s callback, which the Python harness
+can't reach cleanly. The fix is verified via Node syntax check (`node -c
+run.mjs`) and the existing real-Node `test_worker_drains_large_stdout_payload`
+regression continues to pass. Phase 3 may want a Node-side test that
+monkeypatches `process.stdout.write` to never invoke its callback and
+asserts the watchdog still fires; out of scope for the Python test harness.
 
 ---
 
 ## Skipped Issues
 
-### WR-08: `_unique_slug_path` has a TOCTOU race
+### WR-08: `_unique_slug_path` has a TOCTOU race (carried over from iteration 1)
 
 **File:** `src/perfcrawl/output.py:157-172`
 **Reason:** explicitly latent for Phase 2; deferred to Phase 3 per the
-review's own framing and the orchestrator context note.
+review's own framing and iteration 1's rationale. The re-review confirms
+"properly deferred to Phase 3".
 
 **Original issue:** The `if not candidate.exists(): return candidate` pattern
-is textbook check-then-act TOCTOU. The review itself states: "Phase 2 is
-single-URL-single-run so this can't fire in practice, but Phase 3 (multi-page
-concurrent writes) will ship the race unless this is fixed at the boundary."
+is textbook check-then-act TOCTOU.
 
-**Rationale for skip:**
-- The race is unreachable in Phase 2: every measure invocation writes one
-  page, single-process, no concurrency, no retry-with-different-slug. Even
-  the `__N` collision suffix branch is dead code in Phase 2 (every run
-  starts in a fresh `<run_id>/` directory).
+**Rationale for skip (unchanged from iteration 1):**
+- The race is unreachable in Phase 2: every `measure_url` invocation writes
+  one page, single-process, no concurrency. Even the `__N` collision suffix
+  branch is dead code in Phase 2 (every run starts in a fresh `<run_id>/`
+  directory).
 - The proper fix is an `O_CREAT | O_EXCL` exclusive-creation loop, which
   changes the I/O contract (`_atomic_write_text` would need to learn an
-  "or-fail-if-exists" mode). That refactor is best landed alongside Phase 3's
-  concurrent multi-page writer where the test surface for it actually
+  "or-fail-if-exists" mode). That refactor is best landed alongside Phase
+  3's concurrent multi-page writer where the test surface for it actually
   exists.
 - **Phase 3 backlog item to file:** convert `_unique_slug_path` +
   `_atomic_write_text` to an exclusive-creation pattern (`os.O_CREAT |
-  os.O_EXCL | os.O_WRONLY`), catch `FileExistsError`, increment, retry. Add
-  a multi-worker stress test (two coroutines writing the same slug
+  os.O_EXCL | os.O_WRONLY`), catch `FileExistsError`, increment, retry.
+  Add a multi-worker stress test (two coroutines writing the same slug
   concurrently → both end up on disk under distinct `__N` suffixes).
 
 ---
 
 ## Notes
 
-- **Test count drift:** baseline default suite was 178 passed; HEAD is 188
-  passed. Net add: WR-01 (×1), WR-04 (×2), WR-05 (×1), WR-06 (×2), WR-07 (×1),
-  WR-09 (×1), WR-11 (×2) = 10 new regression tests. No tests removed.
-- **Carry-over status:** WR-01, WR-02, WR-04, WR-05, WR-06, WR-07, WR-09 were
-  carry-over from the prior review; WR-10 and WR-11 are new findings; WR-03
-  is a documentation-only carry-over. All resolved in this iteration except
-  WR-08 (skipped with rationale above).
-- **Coverage-gap section of REVIEW.md (informational, not a finding):** the
-  reviewer's bulleted list at the end of REVIEW.md is now closed by the
-  regression tests landed in this fix pass — `node` FileNotFoundError, tempdir
-  cleanup on Popen + sync_playwright failure, trailing-dot truncation, and
-  CRLF line endings all have pinning tests.
-- **Out of scope** (info-tier; not addressed): IN-01..IN-08 remain open per
-  the `critical_warning` fix scope. The CLI defensive-page-access (IN-02),
-  chrome_version parsing (IN-03), `_check_version` whitespace/v-prefix
-  normalization (IN-04), and the watchdog-clear-position issue (IN-08) are
-  the highest-signal info findings the team may want to triage into a
-  follow-up before phase ship.
+- **Test count drift:** baseline at parent `83ec507` was 188 passed,
+  1 deselected. HEAD is 199 passed, 1 skipped, 1 deselected.
+  Net change: +5 new regression test files / functions, of which:
+  - `test_first_raw_report_prefers_nonempty_payload_over_empty_sentinel` (WR-12)
+  - `test_render_human_table_handles_empty_pages` (IN-02)
+  - `test_runrecord_metadata_chrome_version_none_when_ua_missing` (IN-03)
+  - `test_check_version_normalizes_input` parametrized × 8 (IN-04)
+  - `test_worker_rejects_invalid_form_factor` (IN-01 — graceful skip if
+    `lighthouse-worker/node_modules` is missing)
+
+  Plus `test_runrecord_metadata_stamping` (existing test for IN-03) was
+  tightened from a substring assertion to exact-equality on the parsed
+  version triple.
+
+- **Skip-on-missing-deps for IN-01:** the IN-01 regression test
+  (`test_worker_rejects_invalid_form_factor`) calls `node run.mjs` directly
+  with bad argv. The worker top-level-imports `lighthouse`, so even
+  fail-fast validation requires the `lighthouse` npm package to be present.
+  When `lighthouse-worker/node_modules` is absent, the test skips
+  gracefully rather than failing — matches the existing
+  `test_worker_drains_large_stdout_payload` precedent. In the test
+  environment used here the test passed against a symlinked `node_modules`;
+  CI / fresh checkouts without `npm ci` will skip.
+
+- **WR-12 was the highest-value fix:** real silent-data-loss bug
+  introduced by iteration 1's WR-04 fix. The bug fired when a malformed
+  sample-1 envelope (empty `reportJson` / `reportHtml`) made the
+  `if first_raw_report is None` sentinel update lock in `("", "")` as the
+  first-with-artifact tuple, which the WR-04 truthiness skip in
+  `output.py` then silently dropped — losing
+  `lighthouse/<slug>.{json,html}` even though sample 2 captured a valid
+  full payload in memory. The fix gates the sentinel update on payload
+  truthiness so a later sample with real bytes wins the slot.
+
+- **IN-07 + IN-08 collapse:** per the reviewer's explicit note,
+  "This also subsumes IN-07 (the stderr write inside the error branch
+  now has a callback). Two findings collapse into one diff." Honored.
+
+- **No CR-tier findings** in the re-review: CR-01 (worker drain),
+  CR-02 (reap chrome on kill), CR-03 (tempdir cleanup on launcher
+  timeout) all remain closed by iteration 1.
+
+- **Ruff drift:** baseline at `83ec507` reports 26 errors; HEAD reports
+  29. The 3 new entries are all `I001` (un-sorted test-function-local
+  imports in `test_orchestrator.py`) following the codebase's existing
+  pattern of importing inside the test function rather than at the top
+  of the file. No new error categories introduced (no B008, F401, F841,
+  E501 added by my changes).
+
+- **Coverage-gap section of REVIEW.md (informational):**
+  - WR-12 regression test: ✓ landed
+    (`test_first_raw_report_prefers_nonempty_payload_over_empty_sentinel`)
+  - IN-04 `lighthouseVersion=None` / `"v13.3.0"` parametrized test: ✓
+    landed (`test_check_version_normalizes_input`)
+  - IN-07/IN-08 watchdog-defense test (monkeypatch
+    `process.stdout.write` to never call callback): NOT landed.
+    Per reviewer's own note it's "slightly out of the Python harness's
+    usual lane"; deferred to a Phase 3 Node-side test infrastructure
+    addition.
+
+- **Logic-bug review (per `verification_strategy`):** none of the fixes
+  in this iteration introduce a wrong condition / off-by-one / bad state
+  handling. WR-12 is the only fix that changes a runtime predicate, and
+  it's a strict-stricter condition (added a truthiness check); the RED
+  test exercises the exact transition (empty sample 1, full sample 2).
+  Status of each commit can be marked plain `fixed` rather than
+  `fixed: requires human verification`.
 
 ---
 
-_Fixed: 2026-05-29T14:36:17Z_
+_Fixed: 2026-05-29T15:35:00Z_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_
