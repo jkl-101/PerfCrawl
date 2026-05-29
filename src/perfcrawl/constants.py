@@ -6,8 +6,11 @@ a timeout, sample count, version string, exit code, or column label.
 - ``PER_SAMPLE_TIMEOUT_S`` (D-14): subprocess.run(timeout=...) for the Node worker.
 - ``DEFAULT_SAMPLES_N`` (D-08/D-16, Claude's-discretion): default for ``--samples``.
   Odd-N is friendlier for median (no even-N midpoint averaging).
-- ``EXPECTED_LIGHTHOUSE_MAJOR_MINOR`` (D-10): normalizer version gate. Bump when
-  the worker's ``package-lock.json`` bumps the Lighthouse pin.
+- ``EXPECTED_LIGHTHOUSE_MAJOR`` (D-10): normalizer version gate. Bump when
+  the worker's ``package-lock.json`` bumps the Lighthouse major. The name
+  reflects the actual enforcement (major-only); minor-level pinning is
+  intentionally not enforced because per-minor LH releases routinely keep
+  audit shape backward-compatible.
 - ``INP_PROXY_DISPLAY_LABEL`` (D-11): the human-summary column header for the TBT
   proxy. The CSV column name is the field name (``inp_proxy_tbt_ms``); the Rich
   table header reads the label declared here. Defense-in-depth: model layer +
@@ -40,8 +43,13 @@ PER_SAMPLE_TIMEOUT_S: int = 60  # seconds; the only "per-sample timeout" referen
 DEFAULT_SAMPLES_N: int = 3  # odd-N is friendlier for median (Claude's discretion)
 
 # --- D-10: normalizer version gate (the ONE editable place) -----------------
-# Bumped only when ``lighthouse-worker/package-lock.json`` bumps the pin.
-EXPECTED_LIGHTHOUSE_MAJOR_MINOR: str = "13.x"
+# Bumped only when ``lighthouse-worker/package-lock.json`` bumps the LH MAJOR.
+# WR-02: the previous name ``EXPECTED_LIGHTHOUSE_MAJOR_MINOR`` (value "13.x")
+# advertised minor-band pinning that the gate did not enforce — the gate has
+# always been major-only. The name now matches the behavior; per-minor LH
+# releases routinely keep audit shape backward-compatible, so major-only is
+# the right band. To raise the floor, bump this to ``"14"`` etc.
+EXPECTED_LIGHTHOUSE_MAJOR: str = "13"
 
 # --- D-11 / D-15: labeled-proxy display label (the ONE editable place) ------
 # Read by the Rich table header in the CLI display layer; defense-in-depth above
