@@ -391,6 +391,65 @@ def test_devtools_port_polling(monkeypatch, tmp_path):
         monkeypatch.setattr(orch.time, "sleep", original_sleep)
 
 
+def test_launcher_cleans_tempdir_on_sync_playwright_failure(monkeypatch, tmp_path):
+    """WR-11: ``sync_playwright()`` raising must not leak the freshly-created tempdir.
+
+    CR-03 (closed) plugged one tempdir-leak path: the DevToolsActivePort
+    timeout. WR-11 is the structural sibling — if ``sync_playwright()``
+    raises (Playwright not installed, chromium binary not downloaded) AFTER
+    ``tempfile.mkdtemp`` returned, ``user_data_dir`` was created but never
+    cleaned. Mirror CR-03's self-contained cleanup pattern: rmtree before
+    re-raising.
+    """
+    import perfcrawl.orchestrator as orch
+
+    user_data_dir = tmp_path / "chrome-pw-fail"
+    user_data_dir.mkdir()
+    (user_data_dir / "marker").write_text("hi")
+
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+
+    def _raise_pw():
+        raise RuntimeError("playwright not installed; run `playwright install chromium`")
+
+    monkeypatch.setattr(orch, "sync_playwright", _raise_pw)
+
+    with pytest.raises(RuntimeError):
+        orch._launch_chrome_with_cdp_port()
+    assert not user_data_dir.exists(), (
+        "user_data_dir leaked when sync_playwright raised — WR-11 regression"
+    )
+
+
+def test_launcher_cleans_tempdir_on_popen_failure(monkeypatch, tmp_path):
+    """WR-11: ``subprocess.Popen`` raising must not leak the freshly-created tempdir.
+
+    Same disk-leak class as CR-03: a missing/non-executable chrome binary
+    surfaces as ``FileNotFoundError`` from Popen, which previously left the
+    ``user_data_dir`` tempdir behind on every retry.
+    """
+    import perfcrawl.orchestrator as orch
+
+    user_data_dir = tmp_path / "chrome-popen-fail"
+    user_data_dir.mkdir()
+    (user_data_dir / "marker").write_text("hi")
+
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+    fake_browser = _FakeBrowser()
+    monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
+
+    def _raise_popen(*a, **kw):
+        raise FileNotFoundError("/fake/chromium: not found")
+
+    monkeypatch.setattr(orch.subprocess, "Popen", _raise_popen)
+
+    with pytest.raises(FileNotFoundError):
+        orch._launch_chrome_with_cdp_port()
+    assert not user_data_dir.exists(), (
+        "user_data_dir leaked when subprocess.Popen raised — WR-11 regression"
+    )
+
+
 def test_devtools_port_polling_checks_before_sleep(monkeypatch, tmp_path):
     """WR-05: the polling loop checks for DevToolsActivePort BEFORE the first sleep.
 
