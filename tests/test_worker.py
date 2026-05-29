@@ -68,6 +68,55 @@ def test_worker_returns_none_on_json_decode_error(monkeypatch):
     assert run_one_sample(port=9222, url="https://x.com", emulation="mobile", timeout_s=60) is None
 
 
+def test_worker_returns_none_on_non_utf8_stdout(monkeypatch):
+    """WR-06: non-UTF-8 stdout bytes → None (not uncaught UnicodeDecodeError).
+
+    Previously ``subprocess.run(text=True, encoding="utf-8")`` raised
+    ``UnicodeDecodeError`` if the worker emitted non-UTF-8 bytes (a future LH
+    version leaking a binary trace, a UTF-16 BOM, etc.). The exception was
+    NOT caught by the ``except subprocess.TimeoutExpired`` block, so it
+    bubbled up and violated the D-15 three-exit-code contract.
+
+    Fix: capture bytes and decode with ``errors="replace"``. The garbled
+    decoded stdout fails ``json.loads`` and the existing
+    ``json.JSONDecodeError`` handler converts to ``None`` cleanly.
+    """
+    from perfcrawl.lighthouse_worker import run_one_sample
+
+    # Bytes that cannot be decoded as UTF-8 (lone 0x80 continuation byte).
+    non_utf8 = b"\x80\x81\x82\x83 not json"
+
+    def _fake(argv, **kw):
+        # The fix uses ``capture_output=True`` WITHOUT ``text=True``, so the
+        # returned proc has bytes for stdout/stderr.
+        return SimpleNamespace(returncode=0, stdout=non_utf8, stderr=b"")
+
+    monkeypatch.setattr("subprocess.run", _fake)
+    # Must NOT raise UnicodeDecodeError; returns None (JSON-decode-failure path).
+    assert run_one_sample(
+        port=9222, url="https://x.com", emulation="mobile", timeout_s=60
+    ) is None
+
+
+def test_worker_decodes_stderr_defensively_on_nonzero_exit(monkeypatch, capsys):
+    """WR-06: worker-error stderr bytes are decoded with errors='replace' for logging."""
+    from perfcrawl.lighthouse_worker import run_one_sample
+
+    # Non-UTF-8 bytes in stderr — must not raise on the sys.stderr.write call.
+    def _fake(argv, **kw):
+        return SimpleNamespace(
+            returncode=1, stdout=b"", stderr=b"worker error: \x80 partial msg"
+        )
+
+    monkeypatch.setattr("subprocess.run", _fake)
+    assert run_one_sample(
+        port=9222, url="https://x.com", emulation="mobile", timeout_s=60
+    ) is None
+    err = capsys.readouterr().err
+    # The replacement char (U+FFFD) appears where 0x80 was.
+    assert "worker error" in err
+
+
 def _capturing_subprocess(captured: dict):
     """Helper: replace subprocess.run with a recorder that returns a stub success."""
 
