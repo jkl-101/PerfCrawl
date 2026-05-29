@@ -23,6 +23,9 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
+markers = [
+    "e2e: end-to-end test requiring Node + Chrome + network (opt-in; skipped by default in CI)",
+]
 
 [tool.ruff]
 src = ["src", "tests"]

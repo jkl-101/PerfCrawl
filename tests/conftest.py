@@ -8,6 +8,7 @@ metric, a NEW page, a REMOVED page, and a metric present on only one side
 (``not_comparable``).
 """
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -22,6 +23,7 @@ from perfcrawl.models import (
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+LH_FIXTURES_DIR = FIXTURES_DIR / "lighthouse"
 
 
 @pytest.fixture
@@ -46,6 +48,27 @@ def run_v1_old_schema_json() -> str:
 def run_v1(run_v1_json: str) -> RunRecord:
     """The full fixture parsed into a RunRecord."""
     return RunRecord.model_validate_json(run_v1_json)
+
+
+# --- Phase 2 LH-13.3.0 fixtures (consumed by tests/test_normalizer.py) -------
+
+
+@pytest.fixture
+def lh_home_200() -> dict:
+    """A real LH 13.3.0 JSON capture of a 200-response homepage (Phase 2 D-09/D-12)."""
+    return json.loads((LH_FIXTURES_DIR / "studyhalo-home-200.json").read_text())
+
+
+@pytest.fixture
+def lh_404() -> dict:
+    """LH 13.3.0 JSON capture of a 404 main-document (Phase 2 D-13 partial-result)."""
+    return json.loads((LH_FIXTURES_DIR / "studyhalo-404.json").read_text())
+
+
+@pytest.fixture
+def lh_version_14_drift() -> dict:
+    """Synthetic LH 14.0.0 JSON for the D-10 version-gate test."""
+    return json.loads((LH_FIXTURES_DIR / "version-drift-14.json").read_text())
 
 
 @pytest.fixture

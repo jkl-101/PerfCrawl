@@ -1,0 +1,14 @@
+{
+  "name": "lighthouse-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PerfCrawl Lighthouse measurement worker (Phase 2 D-02/D-04). One-shot ESM Node subprocess: argv-in, JSON-over-stdout.",
+  "license": "ISC",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "lighthouse": "13.3.0"
+  }
+}
