@@ -391,6 +391,52 @@ def test_devtools_port_polling(monkeypatch, tmp_path):
         monkeypatch.setattr(orch.time, "sleep", original_sleep)
 
 
+def test_devtools_port_polling_checks_before_sleep(monkeypatch, tmp_path):
+    """WR-05: the polling loop checks for DevToolsActivePort BEFORE the first sleep.
+
+    Pre-fix shape:
+
+        for _ in range(max_attempts):
+            time.sleep(DEVTOOLS_PORT_POLL_INTERVAL_S)
+            if port_file.exists(): ...
+
+    paid one full ``DEVTOOLS_PORT_POLL_INTERVAL_S`` wait even when Chrome had
+    already written the file before the loop started — which is the common
+    case on fast machines. Post-fix the loop must check existence FIRST so a
+    file present at t=0 returns without sleeping.
+
+    Pin: monkeypatch ``time.monotonic`` to be deterministic, ensure the file
+    exists before the launcher polls, and assert ``time.sleep`` is NEVER
+    called.
+    """
+    import perfcrawl.orchestrator as orch
+
+    user_data_dir = tmp_path / "chrome-port-fast"
+    user_data_dir.mkdir()
+    # Write the DevToolsActivePort file BEFORE the launcher polls.
+    (user_data_dir / "DevToolsActivePort").write_text("12345\n/devtools/browser/abc")
+    fake_proc = _FakeChromeProc()
+
+    monkeypatch.setattr(orch.subprocess, "Popen", lambda *a, **kw: fake_proc)
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+    fake_browser = _FakeBrowser()
+    monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
+
+    sleep_calls = {"n": 0}
+
+    def _tracked_sleep(_seconds):
+        sleep_calls["n"] += 1
+
+    monkeypatch.setattr(orch.time, "sleep", _tracked_sleep)
+
+    proc, port, _ = orch._launch_chrome_with_cdp_port()
+    assert port == 12345
+    assert sleep_calls["n"] == 0, (
+        f"polling slept {sleep_calls['n']} times even though port file was already "
+        f"present at t=0; check-before-sleep regression"
+    )
+
+
 def test_devtools_port_timeout_raises(monkeypatch, tmp_path):
     """Pitfall 1: DevToolsActivePort never appears → MeasurementError."""
     import perfcrawl.orchestrator as orch
