@@ -75,8 +75,11 @@ def aggregate_page_samples(samples: list[PageResult]) -> PageResult:
 
     The aggregated PageResult still passes the Phase 1 ``_no_bare_inp`` validator
     by construction: no bare ``inp`` variable name appears here, only the
-    labeled ``inp_proxy_tbt_ms`` field (D-15). ``model_copy(update=...)`` preserves
-    the validator path so the labeled-proxy invariant cannot regress here.
+    labeled ``inp_proxy_tbt_ms`` field (D-15). Note that Pydantic v2
+    ``model_copy(update=...)`` copies field values into a new instance WITHOUT
+    re-running ``@model_validator(mode='after')`` hooks, so the model-layer
+    floor is enforced at ``samples[0]``'s construction time, not here; the
+    aggregator carries that already-validated shape forward.
 
     Raises:
         ValueError: if ``samples`` is empty (the orchestrator must never call
@@ -107,8 +110,10 @@ def aggregate_page_samples(samples: list[PageResult]) -> PageResult:
         ]
         updates[field] = aggregate_samples(per_sample_medians)
 
-    # Pydantic v2: model_copy(update=...) preserves model_config + validators
-    # (including _no_bare_inp) more cheaply than reconstructing from scratch.
+    # Pydantic v2 model_copy(update=...) preserves field types but does NOT
+    # re-run model validators (including _no_bare_inp). The labeled-proxy floor
+    # is enforced at the model layer (Phase 1) at samples[0]'s construction
+    # time; this aggregator carries forward that already-validated shape.
     # Scalar/list/dict fields are inherited from samples[0] (the canonical first
     # sample); only the four MetricSample fields are overridden.
     return samples[0].model_copy(update=updates)
