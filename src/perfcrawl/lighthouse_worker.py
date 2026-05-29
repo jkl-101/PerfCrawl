@@ -20,6 +20,7 @@ Security (RESEARCH § Security Domain):
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -95,17 +96,37 @@ def run_one_sample(
 
 
 def preflight(worker_dir: Path | None = None) -> None:
-    """Verify the Node Lighthouse worker is installed (Open Q5).
+    """Verify the Node runtime + Lighthouse worker are installed (Open Q5 / WR-01).
 
     Called once per ``measure_url(...)`` invocation by the orchestrator
     (02-03 Task 2) BEFORE Chrome is launched, so a missing install fails fast
     with an actionable message rather than after a 5s DevToolsActivePort timeout.
 
+    Two checks (both raise ``MeasurementError`` — the CLI maps to
+    ``ExitCode.MEASUREMENT_ERROR`` per D-15):
+
+    1. WR-01: ``shutil.which("node")`` confirms the Node binary itself is
+       resolvable on PATH. Without this check a missing ``node`` produces a
+       ``FileNotFoundError`` from ``subprocess.run(["node", ...])`` inside
+       ``run_one_sample`` that the ``except subprocess.TimeoutExpired`` block
+       does NOT catch, leaving an uncaught traceback that violates the D-15
+       three-exit-code contract.
+    2. ``{worker_dir}/node_modules/lighthouse/package.json`` confirms the
+       worker's npm install ran.
+
     Raises:
-        MeasurementError: if ``{worker_dir}/node_modules/lighthouse/package.json``
-            does not exist. The message names the exact ``cd``/``npm ci`` command
-            the user should run, citing CLAUDE.md § Installation.
+        MeasurementError: with an actionable message naming the missing
+            dependency and the documented install command (CLAUDE.md §
+            Installation).
     """
+    # WR-01: check the node binary BEFORE the node_modules marker so a missing
+    # runtime is named explicitly rather than being shadowed by the worker
+    # install message. CLAUDE.md § Installation requires Node >=22.19.
+    if shutil.which("node") is None:
+        raise MeasurementError(
+            "node binary not found on PATH — install Node >=22.19 "
+            "(see CLAUDE.md § 'Installation')."
+        )
     if worker_dir is None:
         worker_dir = WORKER_SCRIPT.parent
     marker = worker_dir / "node_modules" / "lighthouse" / "package.json"
