@@ -224,3 +224,24 @@ def test_json_file_is_valid_json(sample_run: RunRecord, tmp_path: Path) -> None:
     assert data["target"] == sample_run.target
     assert isinstance(data["pages"], list)
     assert len(data["pages"]) == len(sample_run.pages)
+
+
+def test_csv_has_lf_only_line_endings(sample_run: RunRecord, tmp_path: Path) -> None:
+    """WR-09: ``result.csv`` must have LF-only line endings, not CRLF.
+
+    Python's ``csv`` module always emits ``\\r\\n`` terminators per RFC 4180.
+    Because we build the CSV in a ``StringIO`` and write the buffer's value
+    verbatim, the ``\\r`` bytes survive to disk on every platform — leaving
+    naive consumers (jq, awk, naive ``open(..., newline="\\n")`` readers,
+    and gspread cell-upload) seeing a literal ``\\r`` at the end of each row.
+
+    Assert no ``\\r`` byte appears in the on-disk file.
+    """
+    run_dir = write_outputs(sample_run, output_dir=tmp_path)
+    raw = (run_dir / "result.csv").read_bytes()
+    assert b"\r" not in raw, (
+        f"result.csv contains carriage return bytes (CRLF leak): "
+        f"first \\r at offset {raw.find(b'\r')}"
+    )
+    # Sanity: the file still has at least one LF separator.
+    assert b"\n" in raw
