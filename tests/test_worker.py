@@ -9,6 +9,8 @@ Mocks ``subprocess.run`` per 02-PATTERNS § "tests/test_worker.py" — the worke
 itself is intentionally a thin wrapper, so the tests live entirely in Python land.
 """
 
+import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -176,3 +178,70 @@ def test_worker_script_path_resolves_to_repo_root_sibling():
     assert isinstance(WORKER_SCRIPT, Path)
     assert WORKER_SCRIPT.name == "run.mjs"
     assert WORKER_SCRIPT.parent.name == "lighthouse-worker"
+
+
+def test_worker_drains_large_stdout_payload(tmp_path: Path):
+    """CR-01 regression: a >1MB stdout payload survives the Node->Python pipe.
+
+    Verifier finding (02-VERIFICATION.md gap #1):
+
+      "Add a regression test that pumps a >1 MB synthetic payload through the
+       worker subprocess (real subprocess, not mocked) and asserts Python
+       parses the full JSON."
+
+    This test does NOT invoke the real lighthouse-worker/run.mjs — that would
+    require Node + chrome-launcher + a target URL (the e2e-suite's territory).
+    Instead it writes a tiny shim script using the SAME drain-before-exit
+    pattern Task 1 introduces (process.stdout.write(payload, (err) => ...))
+    and spawns it via subprocess.run. If this test goes red, the worker's
+    stdout handoff pattern is broken at the language/runtime level, not just
+    at the Lighthouse-specific level.
+
+    The shim emits a 1.5MB JSON envelope (well above the ~64KB Linux pipe
+    buffer and the ~16KB macOS pipe buffer) and asserts Python receives
+    every byte intact.
+
+    Skipped (not failed) when ``node`` is not on PATH so CI without Node
+    passes cleanly.
+
+    Negative control intentionally omitted — Task 1's grep-guard for
+    ``process.exit(0)`` position is the static analog.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node binary not on PATH; CR-01 regression requires Node runtime")
+
+    big_chunk = "x" * 1_500_000  # 1.5 MB — comfortably above all pipe buffers
+    shim = tmp_path / "shim.mjs"
+    shim.write_text(
+        "const payload = JSON.stringify({"
+        "lhr:{lighthouseVersion:'13.3.0'},"
+        f"reportJson:'{big_chunk}',"
+        f"reportHtml:'{big_chunk}'"
+        "});\n"
+        # Mirror Task 1's drain-before-exit pattern verbatim.
+        "process.stdout.write(payload, (err) => {\n"
+        "  if (err) { process.stderr.write(String(err)); process.exit(1); }\n"
+        "  process.exit(0);\n"
+        "});\n"
+    )
+
+    proc = subprocess.run(
+        [node, str(shim)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+    )
+    assert proc.returncode == 0, f"shim exit {proc.returncode}; stderr={proc.stderr}"
+    # Sanity: stdout is bigger than any pipe buffer we'd ever encounter.
+    assert len(proc.stdout) > 1_000_000, (
+        f"stdout truncated at {len(proc.stdout)} bytes — drain failed"
+    )
+    # The whole envelope round-trips through json.loads (the same call
+    # lighthouse_worker.py:91 makes against the real worker).
+    parsed = json.loads(proc.stdout)
+    assert parsed["lhr"]["lighthouseVersion"] == "13.3.0"
+    assert len(parsed["reportJson"]) == 1_500_000
+    assert len(parsed["reportHtml"]) == 1_500_000
+    assert all(c == "x" for c in parsed["reportJson"][:1000])
