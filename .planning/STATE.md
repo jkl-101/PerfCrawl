@@ -2,9 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_ship
+status: shipped
 last_updated: "2026-05-30T00:00:00.000Z"
 last_activity: 2026-05-30
+shipped_pr: "https://github.com/jkl-101/PerfCrawl/pull/1"
 progress:
   total_phases: 6
   completed_phases: 1
@@ -24,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-25)
 
 ## Current Position
 
-Phase: 02 (single-page-measurement-slice) — VERIFIED (all gates green, ready to ship)
+Phase: 02 (single-page-measurement-slice) — SHIPPED (PR #1 open)
 Plan: 5 of 5 (all plans complete)
-Status: Phase 02 closed — UAT 10/10 passed, REVIEW 0 critical (9/10 fixed, 1 deferred to Phase 3), SECURITY 26/26 closed, VALIDATION 18/18 covered. PR not yet opened.
-Last activity: 2026-05-30 - /gsd-verify-work 2 reconfirmed UAT complete; phase 2 ready for /gsd-ship 2
+Status: Phase 02 shipped — PR #1 https://github.com/jkl-101/PerfCrawl/pull/1 (76 commits ahead of main). UAT 10/10, REVIEW 0 critical, SECURITY 26/26, VALIDATION 18/18, VERIFICATION pass.
+Last activity: 2026-05-30 - /gsd-ship 2 created PR #1; awaiting review + merge.
 
 **Ship note (Phase 01):** Work was committed directly to `main` and pushed to
 `origin/main` before the team switched to feature branches. No PR could be
