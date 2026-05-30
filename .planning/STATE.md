@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-25)
 Phase: 02 (single-page-measurement-slice) — EXECUTING (gap-closure complete; ready for re-verify → ship)
 Plan: 5 of 5 (gap-closure plan complete)
 Status: Phase 02 implementation done; real e2e green; re-verification pending
-Last activity: 2026-05-29
+Last activity: 2026-05-30 - Completed quick task 260530-b14: audit confirmed CR-01/02/03 fixes + worker-pipe regression test were already in HEAD; verifier report is stale
 
 **Ship note (Phase 01):** Work was committed directly to `main` and pushed to
 `origin/main` before the team switched to feature branches. No PR could be
@@ -90,6 +90,12 @@ None yet.
 - [Phase 2 readiness]: Spike the Playwright `launchPersistentContext` + `--remote-debugging-port` + `disableStorageReset:true` auth handoff on a real authenticated Django page before planning Phase 2 — the single riskiest plumbing seam.
 - [v2 / Backend metrics]: BACK-01..03 deferred; require a dedicated security-gated access-mechanism research spike (production-safe, `DEBUG=False`) before they can be planned. Outcome must land in PROJECT.md Key Decisions.
 - [Phase 2 / metrics]: INP must always be reported as a TBT-based lab proxy, never labeled as field INP — enforce at the Normalizer and output layers.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260530-b14 | Audit + verify CR-01/02/03 fixes & worker-pipe regression test (no-op — already in HEAD; verifier report stale) | 2026-05-30 | (docs-only) | [260530-b14-fix-cr-01-cr-02-cr-03-from-02-review-md-](./quick/260530-b14-fix-cr-01-cr-02-cr-03-from-02-review-md-/) |
 
 ## Deferred Items
 
