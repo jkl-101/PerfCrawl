@@ -1,9 +1,24 @@
 ---
 phase: 02-single-page-measurement-slice
 verified: 2026-05-29T18:30:00Z
-status: gaps_found
-score: 4/5 success criteria verified (SC#1, #2, #3, #4 unit-verified; SC#5 fails real-world end-to-end)
+re_verified: 2026-05-30T00:00:00Z
+status: pass
+score: 5/5 success criteria verified (CR-01/02/03 closed in HEAD per audit 12d7083; UAT 10/10 reconfirmed 2026-05-30)
 overrides_applied: 0
+resolved_gaps:
+  - id: CR-01 (stdout drain)
+    fix_commit: 5a63234
+    audit_commit: 12d7083
+    evidence: "lighthouse-worker/run.mjs:124 — callback-form process.stdout.write(payload, (err) => process.exit(0))"
+  - id: CR-02 (chrome.wait after kill)
+    fix_commit: 12d7083 (audit confirmed already in HEAD)
+    evidence: "src/perfcrawl/orchestrator.py:316 — chrome.wait(timeout=5) after every .kill()"
+  - id: CR-03 (user_data_dir rmtree on launch failure)
+    fix_commit: 12d7083 (audit confirmed already in HEAD)
+    evidence: "src/perfcrawl/orchestrator.py:157 — shutil.rmtree(user_data_dir, ignore_errors=True) before raising on DevToolsActivePort timeout"
+  - id: UAT re-run
+    reference: .planning/phases/02-single-page-measurement-slice/02-UAT.md
+    evidence: "Test 10 (no Chrome zombies / no leaked tempdirs) pass; Test 2 real-network run https://example.com exit 0"
 gaps:
   - truth: "User runs one command against a single URL and gets Lighthouse category scores, Core Web Vitals, network waterfall, and TTFB / request count / total bytes / response sizes / status codes / slowest-request URL+time (SC#1) — end-to-end, in real execution"
     status: failed
