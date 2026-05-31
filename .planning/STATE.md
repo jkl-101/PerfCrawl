@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: phase_01_shipped
-stopped_at: Phase 01 shipped (admin-only, work landed directly on main pre-PR-flow) — ready to discuss Phase 2 on a feature branch
-last_updated: 2026-05-26T00:30:00.000Z
-last_activity: 2026-05-26
+status: shipped
+last_updated: "2026-05-30T00:00:00.000Z"
+last_activity: 2026-05-30
+shipped_pr: "https://github.com/jkl-101/PerfCrawl/pull/1"
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 8
+  completed_plans: 8
   percent: 17
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-25)
 
 **Core value:** Replace the slow manual per-page performance audit with one command that crawls a site, gathers consistent statistics, and produces actionable analysis.
-**Current focus:** Phase 2 — single page measurement slice
+**Current focus:** Phase 02 — single-page-measurement-slice
 
 ## Current Position
 
-Phase: 2
-Plan: Not started
-Status: Phase 01 shipped (admin-only) — ready to discuss Phase 2 on a feature branch
-Last activity: 2026-05-26
+Phase: 02 (single-page-measurement-slice) — SHIPPED (PR #1 open)
+Plan: 5 of 5 (all plans complete)
+Status: Phase 02 shipped — PR #1 https://github.com/jkl-101/PerfCrawl/pull/1 (76 commits ahead of main). UAT 10/10, REVIEW 0 critical, SECURITY 26/26, VALIDATION 18/18, VERIFICATION pass.
+Last activity: 2026-05-30 - /gsd-ship 2 created PR #1; awaiting review + merge.
 
 **Ship note (Phase 01):** Work was committed directly to `main` and pushed to
 `origin/main` before the team switched to feature branches. No PR could be
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 01 P01 | 2 | 3 tasks | 10 files |
 | Phase 01 P02 | 3 | 2 tasks | 7 files |
 | Phase 01 P03 | 3 | 1 tasks | 2 files |
+| Phase 02 P05 | ~20 min | 4 tasks (3 code + 1 e2e checkpoint) | 4 files modified |
 
 ## Accumulated Context
 
@@ -91,6 +92,12 @@ None yet.
 - [v2 / Backend metrics]: BACK-01..03 deferred; require a dedicated security-gated access-mechanism research spike (production-safe, `DEBUG=False`) before they can be planned. Outcome must land in PROJECT.md Key Decisions.
 - [Phase 2 / metrics]: INP must always be reported as a TBT-based lab proxy, never labeled as field INP — enforce at the Normalizer and output layers.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260530-b14 | Audit + verify CR-01/02/03 fixes & worker-pipe regression test (no-op — already in HEAD; verifier report stale) | 2026-05-30 | (docs-only) | [260530-b14-fix-cr-01-cr-02-cr-03-from-02-review-md-](./quick/260530-b14-fix-cr-01-cr-02-cr-03-from-02-review-md-/) |
+
 ## Deferred Items
 
 Items acknowledged and carried forward:
@@ -105,6 +112,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-25T12:50:04.357Z
-Stopped at: Completed 01-02-PLAN.md (model + store)
+Last session: 2026-05-30T00:00:00.000Z
+Stopped at: Phase 02 verified end-to-end; ready to ship via PR from gsd/phase-02-single-page-measurement-slice → main
 Resume file: None
