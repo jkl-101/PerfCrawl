@@ -24,3 +24,10 @@ htmlcov/
 # perfcrawl runtime artifacts — per-developer; never committed
 # (RESEARCH § Security Domain "Sensitive URL leakage in committed output/")
 output/
+
+# GSD planning state — per-machine AI-orchestration state, never shared via git
+.planning/
+
+# Agent / editor instruction files — local, not tracked
+CLAUDE.md
+.claude/
