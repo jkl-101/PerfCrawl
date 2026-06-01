@@ -121,7 +121,12 @@ def discover(
     per-base-path variant cap + the ``canonical_key`` visited set.
     """
     seen: set[str] = set()  # canonical keys already enqueued (dedup + visited)
-    frontier: deque[tuple[str, int]] = deque()
+    # WR-06: carry the canonical key THROUGH the frontier as (url, key, depth) so
+    # it is computed exactly once at admit time and reused for the error row /
+    # in-scope record. This avoids recompute and removes the consistency risk of
+    # an enqueued key diverging from a later re-derived key if canonicalization is
+    # ever non-idempotent for an edge input.
+    frontier: deque[tuple[str, str, int]] = deque()
     in_scope_results: list[InScope] = []
     errors: list[PageResult] = []
     variants = VariantCounter(cfg.query_variant_cap)
@@ -139,7 +144,7 @@ def discover(
         if not variants.admit(url):
             return
         seen.add(key)
-        frontier.append((url, 0))
+        frontier.append((url, key, 0))
 
     # --- depth-0 seeds: the seed itself + (optional) sitemap-sourced URLs ---
     _admit_seed(seed)
@@ -151,7 +156,7 @@ def discover(
     while frontier:
         if len(in_scope_results) >= cfg.max_pages:  # D-05: stop at the cap
             break
-        url, depth = frontier.popleft()
+        url, key, depth = frontier.popleft()
         if not robots.can_fetch(url):  # CRAWL-03: robots Disallow (unless ignore)
             continue
         # WR-04 (threat T-03-07): apply the politeness delay BEFORE a real GET,
@@ -165,15 +170,12 @@ def discover(
             resp = fetch(url)
         except Exception:
             # A transport-level failure is a tagged error row, not a crash (D-03).
-            errors.append(
-                PageResult(url=url, url_key=canonical_key(url), status_code=None)
-            )
+            # WR-06: reuse the key computed at admit time, never re-derive it.
+            errors.append(PageResult(url=url, url_key=key, status_code=None))
             continue
         status = getattr(resp, "status_code", None)
         if status is None or not (200 <= status < 300):  # D-03: tag + exclude non-2xx
-            errors.append(
-                PageResult(url=url, url_key=canonical_key(url), status_code=status)
-            )
+            errors.append(PageResult(url=url, url_key=key, status_code=status))
             continue
 
         in_scope_results.append(InScope(url=url, depth=depth))
@@ -195,6 +197,7 @@ def discover(
                 if not variants.admit(child):  # D-08: per-base-path variant cap
                     continue
                 seen.add(ckey)
-                frontier.append((child, depth + 1))
+                # WR-06: carry the already-computed child key through the frontier.
+                frontier.append((child, ckey, depth + 1))
 
     return in_scope_results, errors
