@@ -145,6 +145,7 @@ def measure_pass(
     *,
     cfg: CrawlConfig,
     target: str,
+    min_delay_s: float | None = None,
 ) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
     """Measure every in-scope URL via a bounded pool of ``measure_url`` calls.
 
@@ -154,11 +155,23 @@ def measure_pass(
     rows) and ``merged_artifacts`` is the union of every successful call's
     ``{url_key: (reportJson, reportHtml)}`` map.
 
+    ``min_delay_s`` (D-11 / CR-01): the robots-aware effective delay the caller
+    computed (``RobotsGate.effective_delay``). When provided, the politeness gate
+    is built with the STRICTER of ``cfg.min_delay_s`` and ``min_delay_s`` so a
+    robots ``Crawl-delay`` honored during discovery is ALSO honored during the
+    measurement pass — the phase that generates the real Lighthouse load. When
+    ``None`` the gate falls back to ``cfg.min_delay_s`` alone.
+
     Provably terminates: the in-scope list is already bounded by discovery's
     caps; the pool drains it once. On ``KeyboardInterrupt`` the already-collected
     pages are flushed as a valid tagged-partial run (Pitfall 8).
     """
-    gate = _PolitenessGate(cfg.min_delay_s)
+    delay = (
+        cfg.min_delay_s
+        if min_delay_s is None
+        else max(cfg.min_delay_s, min_delay_s)
+    )
+    gate = _PolitenessGate(delay)
     measured: list[PageResult] = []
     merged: dict[str, tuple[str, str]] = {}
     first_run: RunRecord | None = None

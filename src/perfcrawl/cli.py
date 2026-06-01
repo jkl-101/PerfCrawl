@@ -424,8 +424,11 @@ def crawl(
         raise typer.Exit(code=int(ExitCode.SUCCESS))
 
     # --- Measurement pass: bounded pool over the unchanged measure_url seam. ---
+    # CR-01: carry the robots-aware effective delay into the measurement pass so a
+    # robots Crawl-delay honored during discovery is ALSO honored when the real
+    # Lighthouse load is generated (the --delay help text promises this).
     run_record, merged_artifacts = measure_pass(
-        in_scope, errors, cfg=cfg, target=url
+        in_scope, errors, cfg=cfg, target=url, min_delay_s=gate.effective_delay
     )
 
     # D-15 MEASUREMENT_ERROR arm: a crawl where there were pages to measure but
