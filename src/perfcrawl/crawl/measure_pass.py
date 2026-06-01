@@ -101,14 +101,25 @@ def _error_row(url: str) -> PageResult:
 
 
 def _is_error_row(page: PageResult) -> bool:
-    """True iff ``page`` carries no measured Lighthouse data (D-03 error row).
+    """True iff ``page`` carries no measured data at all (D-03 error row).
 
-    A measured page always has at least a perf score or an LCP sample; an error
-    row (measurement failure or a discovery non-2xx row) has both null. Used by
-    the WR-02 dedup tie-break so a colliding error row never overwrites a real
-    measured page.
+    WR-05: requires EVERY measurable metric to be null, not just
+    ``perf_score``/``lcp_ms`` — a 2xx page that measured TTFB/request_count/bytes
+    but for which Lighthouse returned no perf score or LCP is genuine data and
+    must not be classed an error row. Used by the WR-02 dedup tie-break so a
+    colliding error row never overwrites a real measured page.
     """
-    return page.perf_score is None and page.lcp_ms is None
+    return (
+        page.perf_score is None
+        and page.lcp_ms is None
+        and page.cls is None
+        and page.inp_proxy_tbt_ms is None
+        and page.ttfb_ms is None
+        and page.request_count is None
+        and page.total_bytes is None
+        and page.slowest_request_url is None
+        and page.slowest_request_ms is None
+    )
 
 
 def _measure_one(

@@ -141,12 +141,29 @@ def _render_human_table(run, *, samples: int, run_dir: Path) -> None:
 
 
 def _is_error_row(page) -> bool:
-    """True iff ``page`` is a tagged error row (no score, no CWV — D-03).
+    """True iff ``page`` is a tagged error row (no measured data at all — D-03).
 
     An error row carries only ``url``/``url_key`` (and maybe ``status_code``);
-    every metric is None. Used to split the crawl summary into measured vs errors.
+    EVERY measurable metric is None. Used to split the crawl summary into measured
+    vs errors and to drive the crawl exit code.
+
+    WR-05: the decision requires ALL metric fields to be null, not just
+    ``perf_score``/``lcp_ms``. A real 2xx page that measured TTFB / request_count /
+    bytes / status but for which Lighthouse returned neither a perf score nor an
+    LCP is genuine measured data and must NOT be miscounted as an error row (which
+    could otherwise flip a partial-success crawl to exit 2).
     """
-    return page.perf_score is None and page.lcp_ms is None
+    return (
+        page.perf_score is None
+        and page.lcp_ms is None
+        and page.cls is None
+        and page.inp_proxy_tbt_ms is None
+        and page.ttfb_ms is None
+        and page.request_count is None
+        and page.total_bytes is None
+        and page.slowest_request_url is None
+        and page.slowest_request_ms is None
+    )
 
 
 def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
