@@ -24,15 +24,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
 from perfcrawl.canonical import canonical_key
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import InScope
 from perfcrawl.crawl.measure_pass import measure_pass
 from perfcrawl.models import MetricSample, PageResult, RunRecord
 from perfcrawl.store import init_db, write_run
-
 
 # --------------------------------------------------------------------------- #
 # Helpers
