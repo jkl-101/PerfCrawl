@@ -26,7 +26,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-import pytest
 from typer.testing import CliRunner
 
 from perfcrawl.cli import app
@@ -66,7 +65,14 @@ def _canned_run(url: str, samples: int = 1, emulation: str = "mobile"):
 
 
 def _patch_measure(monkeypatch, *, side_effect=None) -> list:
-    """Patch ``perfcrawl.cli.measure_url``; record every call (url-keyed)."""
+    """Patch the measure_url seam the crawl actually invokes; record every call.
+
+    ``measure_pass`` calls ``perfcrawl.crawl.measure_pass.measure_url`` (not
+    ``perfcrawl.cli.measure_url`` — the CLI delegates measurement entirely to the
+    pool driver). Patch THAT symbol so no real Chrome/Node launches and the
+    "measured nothing under --dry-run" assertion is meaningful (dry-run never
+    reaches the pool, so this fake is never called).
+    """
     calls: list[str] = []
 
     def fake(*, url, samples=1, emulation="mobile"):
@@ -75,7 +81,7 @@ def _patch_measure(monkeypatch, *, side_effect=None) -> list:
             raise side_effect
         return _canned_run(url, samples, emulation)
 
-    monkeypatch.setattr("perfcrawl.cli.measure_url", fake)
+    monkeypatch.setattr("perfcrawl.crawl.measure_pass.measure_url", fake)
     return calls
 
 
@@ -121,6 +127,8 @@ def test_dry_run(monkeypatch, tmp_path: Path, local_server: str) -> None:
             "crawl",
             local_server + "/index.html",
             "--dry-run",
+            "--delay",
+            "0",
             "--output-dir",
             str(tmp_path),
         ],
@@ -147,6 +155,8 @@ def test_multipage_output(monkeypatch, tmp_path: Path, local_server: str) -> Non
         [
             "crawl",
             local_server + "/index.html",
+            "--delay",
+            "0",
             "--output-dir",
             str(tmp_path),
         ],
@@ -200,6 +210,8 @@ def test_json_flag_emits_multipage_json(
             "crawl",
             local_server + "/index.html",
             "--json",
+            "--delay",
+            "0",
             "--output-dir",
             str(tmp_path),
         ],
@@ -226,6 +238,8 @@ def test_ignore_robots_warns_on_stderr(
             "crawl",
             local_server + "/index.html",
             "--ignore-robots",
+            "--delay",
+            "0",
             "--output-dir",
             str(tmp_path),
         ],
@@ -253,6 +267,8 @@ def test_exit_two_when_all_pages_fail(
         [
             "crawl",
             local_server + "/index.html",
+            "--delay",
+            "0",
             "--output-dir",
             str(tmp_path),
         ],

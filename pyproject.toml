@@ -51,3 +51,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+# Typer's argument-default idiom is ``param: T = typer.Option(...)`` /
+# ``typer.Argument(...)`` — a deliberate call-in-default that B008 would
+# otherwise flag. These calls are effectively immutable sentinels (Typer reads
+# them at decoration time), so allowlist them the way the Typer docs recommend.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
