@@ -437,11 +437,18 @@ def crawl(
     # measure) still surfaces as a measurement error so a silent zero-data crawl
     # is never reported as success (T-02-03-PARTIAL lifted to the crawl level).
     measured_count = sum(1 for p in run_record.pages if not _is_error_row(p))
+
+    # WR-03: decide the failure exit BEFORE any side effect. An all-failed crawl
+    # must not (1) persist a zero-data run that later pollutes regression
+    # self-joins, nor (2) let a subsequent write_outputs OSError downgrade the
+    # determined MEASUREMENT_ERROR (exit 2) to USER_ERROR (exit 1). So we raise
+    # exit 2 here, before write_outputs/persist run.
     if measured_count == 0:
         err_console.print(
             "[red]measurement failed:[/red] no page was measured "
             f"({len(run_record.pages)} discovered, all errored or none in scope)"
         )
+        raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
 
     # --- Write outputs (OUT-03/OUT-04). OSError → USER_ERROR per D-15. ---
     try:
@@ -467,7 +474,4 @@ def crawl(
         sys.stdout.write("\n")
     else:
         _render_crawl_summary(run_record, samples=samples, run_dir=run_dir)
-
-    # Exit 2 if nothing measured; else 0 (success-or-partial per D-13).
-    if measured_count == 0:
-        raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
+    # Implicit exit 0 (success-or-partial per D-13).
