@@ -26,7 +26,7 @@ re-derives canonicalization (Pitfall 3).
     (threat T-03-02). Fallback on garbage = False (do not admit what we cannot key).
 """
 
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from urllib.parse import urlsplit
 
 from perfcrawl.canonical import canonical_key
@@ -76,11 +76,14 @@ def passes_filters(url: str, *, includes: list[str], excludes: list[str]) -> boo
     Never raises — garbage input returns ``False`` (threat T-03-03).
     """
     try:
-        if any(fnmatch(url, pat) for pat in excludes):  # D-14: exclude wins
+        # WR-01: ``fnmatchcase`` skips ``os.path.normcase`` so URL glob matching is
+        # case-sensitive and deterministic on every OS (plain ``fnmatch``
+        # lowercases on macOS/Windows but not Linux — environment-dependent).
+        if any(fnmatchcase(url, pat) for pat in excludes):  # D-14: exclude wins
             return False
         if not includes:  # D-14: no --include = all in scope
             return True
-        return any(fnmatch(url, pat) for pat in includes)  # D-14: include narrows
+        return any(fnmatchcase(url, pat) for pat in includes)  # D-14: include narrows
     except Exception:
         return False
 
