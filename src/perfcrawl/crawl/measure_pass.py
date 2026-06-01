@@ -100,6 +100,17 @@ def _error_row(url: str) -> PageResult:
     return PageResult(url=url, url_key=canonical_key(url))
 
 
+def _is_error_row(page: PageResult) -> bool:
+    """True iff ``page`` carries no measured Lighthouse data (D-03 error row).
+
+    A measured page always has at least a perf score or an LCP sample; an error
+    row (measurement failure or a discovery non-2xx row) has both null. Used by
+    the WR-02 dedup tie-break so a colliding error row never overwrites a real
+    measured page.
+    """
+    return page.perf_score is None and page.lcp_ms is None
+
+
 def _measure_one(
     url: str, *, cfg: CrawlConfig, gate: _PolitenessGate
 ) -> tuple[PageResult, tuple[str, str] | None, RunRecord | None]:
@@ -203,11 +214,16 @@ def measure_pass(
     # D-03: discovery's non-2xx error rows surface as pages too.
     all_pages: list[PageResult] = [*measured, *errors]
 
-    # Defensive last-write url_key dedup so the aggregate never trips write_run's
+    # Defensive url_key dedup so the aggregate never trips write_run's
     # duplicate-url_key ValueError, even if a measured page and a discovery error
     # row share a canonical key (the visited set should prevent this upstream).
+    # WR-02: on a collision PREFER the richer record — never let a colliding error
+    # row (metrics null) overwrite a successfully measured page.
     by_key: dict[str, PageResult] = {}
     for page in all_pages:
+        existing = by_key.get(page.url_key)
+        if existing is not None and _is_error_row(page) and not _is_error_row(existing):
+            continue  # keep the measured page over a colliding error row
         by_key[page.url_key] = page
     unique_pages = list(by_key.values())
 
