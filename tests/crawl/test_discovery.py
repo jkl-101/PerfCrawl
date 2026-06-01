@@ -56,7 +56,7 @@ def test_bfs_follows_same_origin_links(local_server, client):
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
     in_scope, errors = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     found = {r.url for r in in_scope}
     # seed + the two in-scope linked pages are discovered.
@@ -70,7 +70,7 @@ def test_out_of_scope_link_dropped(local_server, client):
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
     in_scope, _ = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     found = {r.url for r in in_scope}
     assert not any("other.example.com" in u for u in found)
@@ -83,7 +83,7 @@ def test_depth_is_tracked_and_seed_is_zero(local_server, client):
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
     in_scope, _ = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     by_url = {r.url: r.depth for r in in_scope}
     seed_depth = next(d for u, d in by_url.items() if u.endswith("/index.html"))
@@ -99,7 +99,7 @@ def test_returns_inscope_dataclass(local_server, client):
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
     in_scope, _ = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     assert in_scope and all(isinstance(r, InScope) for r in in_scope)
 
@@ -111,7 +111,7 @@ def test_robots_disallow_skips_url(local_server, client):
     gate = RobotsGate(robots_txt)
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
-    in_scope, _ = discover(seed, cfg=cfg, robots=gate, fetch=_fetch(client))
+    in_scope, _ = discover(seed, cfg=cfg, robots=gate, fetch=_fetch(client), sleep=lambda _s: None)
     found = {r.url for r in in_scope}
     assert not any(u.endswith("/about.html") for u in found)
     # blog.html is NOT disallowed and is still discovered.
@@ -124,7 +124,7 @@ def test_ignore_robots_overrides_disallow(local_server, client):
     gate = RobotsGate(robots_txt, ignore=True)
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
-    in_scope, _ = discover(seed, cfg=cfg, robots=gate, fetch=_fetch(client))
+    in_scope, _ = discover(seed, cfg=cfg, robots=gate, fetch=_fetch(client), sleep=lambda _s: None)
     found = {r.url for r in in_scope}
     assert any(u.endswith("/about.html") for u in found)
 
@@ -134,7 +134,7 @@ def test_caps(local_server, client):
     cfg = CrawlConfig(use_sitemap=False, max_pages=2, max_depth=1)
     seed = local_server + "/index.html"
     in_scope, _ = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     assert len(in_scope) <= 2  # max_pages bound
     assert all(r.depth <= 1 for r in in_scope)  # max_depth bound
@@ -142,7 +142,7 @@ def test_caps(local_server, client):
     # depth-0-only cap: with max_depth=0 the seed is measured but nothing deeper.
     cfg0 = CrawlConfig(use_sitemap=False, max_pages=100, max_depth=0)
     in_scope0, _ = discover(
-        seed, cfg=cfg0, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg0, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     assert all(r.depth == 0 for r in in_scope0)
     assert len(in_scope0) == 1
@@ -153,7 +153,7 @@ def test_error_tagging(local_server, client):
     cfg = CrawlConfig(use_sitemap=False)
     seed = local_server + "/index.html"
     in_scope, errors = discover(
-        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client)
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
     )
     # The fixture's missing.html link 404s → one error row.
     err = next((e for e in errors if e.url.endswith("/missing.html")), None)

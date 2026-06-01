@@ -21,7 +21,7 @@ brand-new ``?month=…`` variants, so a naive crawler would never stop.
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -107,7 +107,11 @@ def test_calendar_trap_terminates(trap_server):
         # If discovery did not terminate, this call would hang and the test would
         # never complete — reaching the assert IS the termination proof.
         in_scope, errors = discover(
-            seed, cfg=cfg, robots=RobotsGate(None), fetch=_fetch(client)
+            seed,
+            cfg=cfg,
+            robots=RobotsGate(None),
+            fetch=_fetch(client),
+            sleep=lambda _s: None,
         )
 
     # max-pages bound (D-05): never more than the cap.
