@@ -1,0 +1,4 @@
+# Fixture robots.txt exercising the Crawl-delay directive (D-11 stricter-of test).
+User-agent: *
+Crawl-delay: 5
+Disallow:

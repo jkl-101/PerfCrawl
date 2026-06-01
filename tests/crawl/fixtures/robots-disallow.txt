@@ -1,0 +1,6 @@
+# Fixture robots.txt with a plain Disallow, a wildcard rule, and a Sitemap directive.
+User-agent: *
+Disallow: /private/
+Disallow: /*.pdf$
+
+Sitemap: https://studyhalo.com/sitemap.xml

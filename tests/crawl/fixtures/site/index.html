@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PerfCrawl fixture site — home</title>
+  </head>
+  <body>
+    <h1>Home</h1>
+    <nav>
+      <!-- in-scope internal links (relative — must urljoin against the base) -->
+      <a href="about.html">About</a>
+      <a href="blog.html">Blog</a>
+      <!-- a same-page fragment + a relative re-link to self (dedup target) -->
+      <a href="index.html#top">Back to top</a>
+      <!-- out-of-scope cross-domain link (scope predicate must drop it) -->
+      <a href="https://other.example.com/x">External site</a>
+      <!-- a link to a path that 404s (discovery error-tagging target, plan 02) -->
+      <a href="missing.html">Broken link</a>
+      <!-- non-http scheme links the scope predicate must reject -->
+      <a href="mailto:team@example.com">Email us</a>
+      <a href="javascript:void(0)">JS link</a>
+    </nav>
+  </body>
+</html>
