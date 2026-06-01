@@ -147,12 +147,20 @@ def discover(
         for sm_url in _sitemap_seeds(seed, robots=robots, fetch=fetch):
             _admit_seed(sm_url)
 
+    fetched_any = False  # WR-04: gates the per-host delay to BEFORE the next fetch
     while frontier:
         if len(in_scope_results) >= cfg.max_pages:  # D-05: stop at the cap
             break
         url, depth = frontier.popleft()
         if not robots.can_fetch(url):  # CRAWL-03: robots Disallow (unless ignore)
             continue
+        # WR-04 (threat T-03-07): apply the politeness delay BEFORE a real GET,
+        # not after one. This drops the trailing dead-time sleep after the final
+        # frontier item and the pointless sleep against a host that errored — the
+        # delay only ever spaces out actual successive requests to the host.
+        if delay and fetched_any:
+            sleep(delay)
+        fetched_any = True
         try:
             resp = fetch(url)
         except Exception:
@@ -160,16 +168,12 @@ def discover(
             errors.append(
                 PageResult(url=url, url_key=canonical_key(url), status_code=None)
             )
-            if delay:
-                sleep(delay)
             continue
         status = getattr(resp, "status_code", None)
         if status is None or not (200 <= status < 300):  # D-03: tag + exclude non-2xx
             errors.append(
                 PageResult(url=url, url_key=canonical_key(url), status_code=status)
             )
-            if delay:
-                sleep(delay)
             continue
 
         in_scope_results.append(InScope(url=url, depth=depth))
@@ -192,7 +196,5 @@ def discover(
                     continue
                 seen.add(ckey)
                 frontier.append((child, depth + 1))
-        if delay:  # threat T-03-07: per-host politeness delay between GETs
-            sleep(delay)
 
     return in_scope_results, errors
