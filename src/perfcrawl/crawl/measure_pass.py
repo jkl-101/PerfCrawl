@@ -128,6 +128,20 @@ def _measure_one(
                 continue
             # All samples failed / non-retryable: tag-and-move-on (D-03).
             return _error_row(url), None, None
+        except KeyboardInterrupt:
+            # Let measure_pass's partial-flush handler catch it (Pitfall 8) — a
+            # Ctrl-C is a crawl-level signal, never a per-page error row.
+            raise
+        except Exception:
+            # CR-01: ANY other per-page failure (a non-MeasurementError raised by
+            # measure_url — UserError, a Playwright/connect error, a bare
+            # RuntimeError/OSError from one misbehaving Chrome) degrades to a tagged
+            # error row, exactly like a MeasurementError. It must NEVER propagate
+            # out of the worker, where the map() loop would re-raise it in the main
+            # thread and crash the whole crawl, discarding every page measured so
+            # far — violating the D-03 "per-page failure never crashes the crawl"
+            # invariant and the Pitfall-8 partial-flush promise.
+            return _error_row(url), None, None
         # measure_url returns a one-page RunRecord; lift its single PageResult.
         page = run.pages[0] if run.pages else _error_row(url)
         artifact = artifacts.get(page.url_key)

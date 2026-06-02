@@ -166,6 +166,33 @@ def test_measurement_error_tags_one_page(monkeypatch) -> None:
     assert by_key[canonical_key("https://example.com/ok1")].perf_score == 90.0
 
 
+def test_unexpected_exception_tags_one_page(monkeypatch) -> None:
+    """CR-01: a non-MeasurementError from measure_url → tagged error row, not a crash.
+
+    A bare RuntimeError raised for one URL must degrade to a tagged error row
+    (like a MeasurementError), leaving the other URLs measured and the pass
+    returning a valid RunRecord — never propagating out of the worker to crash
+    the whole crawl and discard already-measured pages.
+    """
+    bad = "https://example.com/explode"
+    urls = ["https://example.com/ok1", bad, "https://example.com/ok2"]
+    _patch_measure(
+        monkeypatch, side_effects={bad: RuntimeError("chrome went sideways")}
+    )
+    run, merged = measure_pass(
+        _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
+    )
+    assert len(run.pages) == 3  # the crawl survived; all three pages present
+    by_key = {p.url_key: p for p in run.pages}
+    bad_key = canonical_key(bad)
+    assert bad_key in by_key
+    assert by_key[bad_key].perf_score is None  # the failed URL is a tagged error row
+    assert bad_key not in merged  # no artifact for the failed page
+    # The other two measured fine despite the sibling's unexpected blow-up.
+    assert by_key[canonical_key("https://example.com/ok1")].perf_score == 90.0
+    assert by_key[canonical_key("https://example.com/ok2")].perf_score == 90.0
+
+
 def test_discovery_errors_appended_as_rows(monkeypatch) -> None:
     """Discovery-supplied non-2xx error rows surface as pages too (D-03)."""
     _patch_measure(monkeypatch)
