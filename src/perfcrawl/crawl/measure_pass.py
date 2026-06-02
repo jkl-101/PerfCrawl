@@ -227,8 +227,15 @@ def measure_pass(
         # don't block on the full in-scope list during interpreter teardown.
         executor.shutdown(wait=False, cancel_futures=True)
     finally:
-        # Don't wait on cancelled work; threads measuring in-flight are daemonic
-        # enough that measure_url's own try/finally reaps their Chrome.
+        # WR-04: cancel still-queued futures and return the partial run promptly
+        # (wait=False). NOTE: ThreadPoolExecutor workers are NON-daemon, so any
+        # page already mid-measurement is NOT killed here — the interpreter joins
+        # those worker threads at process exit, and control does not fully return
+        # until each in-flight measure_url finishes its current sample (up to the
+        # per-sample Lighthouse timeout). measure_url's own try/finally still reaps
+        # that page's Chrome when its sample completes. So Ctrl-C flushes the
+        # already-collected pages immediately but does not hard-abort an in-flight
+        # sample; a true hard abort would require a custom daemon-thread factory.
         executor.shutdown(wait=False, cancel_futures=True)
 
     # D-03: discovery's non-2xx error rows surface as pages too.
