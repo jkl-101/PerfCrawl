@@ -148,6 +148,13 @@ def discover(
             return
         if not passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
             return
+        # WR-06: drop a robots-Disallow'd candidate as early as scope does
+        # (CRAWL-03 intent), BEFORE it consumes a per-base-path variant-cap slot.
+        # A sitemap commonly advertises URLs robots.txt disallows; admitting them
+        # to the frontier (and the variant cap) would crowd out crawlable siblings
+        # under a tight cap. The main-loop can_fetch check stays as defense-in-depth.
+        if not robots.can_fetch(url):
+            return
         if not variants.admit(url):
             return
         seen.add(key)
@@ -202,6 +209,11 @@ def discover(
                 if not passes_filters(
                     child, includes=cfg.includes, excludes=cfg.excludes
                 ):
+                    continue
+                # WR-06: gate robots Disallow at admit time so a disallowed child
+                # is never enqueued or counted against the per-base-path variant
+                # cap; the main-loop can_fetch stays as defense-in-depth.
+                if not robots.can_fetch(child):
                     continue
                 if not variants.admit(child):  # D-08: per-base-path variant cap
                     continue
