@@ -94,6 +94,10 @@ def _extract_links(html: str) -> list[str]:
         parser.feed(html)
         return parser.hrefs
     except Exception:
+        # IN-03: belt-and-suspenders only. stdlib HTMLParser is lenient and does
+        # NOT raise on malformed markup, so this arm is effectively unreachable for
+        # any HTML input — it exists purely so a future parser swap can't turn a
+        # hostile page into a crawl-killing exception (V5 never-raise discipline).
         return []
 
 
