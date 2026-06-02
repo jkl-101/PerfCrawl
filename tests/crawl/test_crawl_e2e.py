@@ -63,15 +63,16 @@ def test_e2e_crawl_fixture_site(tmp_path: Path, local_server: str) -> None:
 
     import json
 
+    from perfcrawl.crawl import is_error_row
     from perfcrawl.models import RunRecord
 
     run_record = RunRecord.model_validate(json.loads(result.stdout))
     # The fixture index links to about.html + blog.html → discovery finds >1 page.
-    measured = [
-        p
-        for p in run_record.pages
-        if p.perf_score is not None or p.lcp_ms is not None
-    ]
+    # WR-05: use the SAME shared classifier the production crawl uses for its
+    # exit-code/summary split, so "measured" here means exactly what it means in
+    # cli.py (any of the nine metric fields non-null), not a narrower perf/LCP-only
+    # proxy that can disagree with production on a partial-metric page.
+    measured = [p for p in run_record.pages if not is_error_row(p)]
     assert len(measured) > 1, (
         f"expected >1 measured page from the fixture crawl, got {len(measured)} "
         f"({len(run_record.pages)} total pages)"
