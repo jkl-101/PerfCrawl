@@ -46,6 +46,7 @@ from perfcrawl.constants import (
     INP_PROXY_DISPLAY_LABEL,
     ExitCode,
 )
+from perfcrawl.crawl import is_error_row
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import discover
 from perfcrawl.crawl.measure_pass import measure_pass
@@ -140,32 +141,6 @@ def _render_human_table(run, *, samples: int, run_dir: Path) -> None:
     out_console.print(table)
 
 
-def _is_error_row(page) -> bool:
-    """True iff ``page`` is a tagged error row (no measured data at all — D-03).
-
-    An error row carries only ``url``/``url_key`` (and maybe ``status_code``);
-    EVERY measurable metric is None. Used to split the crawl summary into measured
-    vs errors and to drive the crawl exit code.
-
-    WR-05: the decision requires ALL metric fields to be null, not just
-    ``perf_score``/``lcp_ms``. A real 2xx page that measured TTFB / request_count /
-    bytes / status but for which Lighthouse returned neither a perf score nor an
-    LCP is genuine measured data and must NOT be miscounted as an error row (which
-    could otherwise flip a partial-success crawl to exit 2).
-    """
-    return (
-        page.perf_score is None
-        and page.lcp_ms is None
-        and page.cls is None
-        and page.inp_proxy_tbt_ms is None
-        and page.ttfb_ms is None
-        and page.request_count is None
-        and page.total_bytes is None
-        and page.slowest_request_url is None
-        and page.slowest_request_ms is None
-    )
-
-
 def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     """Render the multi-page crawl result as a Rich table on stdout (D-06).
 
@@ -191,7 +166,7 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     measured = 0
     errors = 0
     for page in run.pages:
-        if _is_error_row(page):
+        if is_error_row(page):
             errors += 1
             table.add_row(
                 page.url,
@@ -453,7 +428,7 @@ def crawl(
     # a clean partial. An all-error run with zero in-scope seeds (nothing to
     # measure) still surfaces as a measurement error so a silent zero-data crawl
     # is never reported as success (T-02-03-PARTIAL lifted to the crawl level).
-    measured_count = sum(1 for p in run_record.pages if not _is_error_row(p))
+    measured_count = sum(1 for p in run_record.pages if not is_error_row(p))
 
     # WR-03: decide the failure exit BEFORE any side effect. An all-failed crawl
     # must not (1) persist a zero-data run that later pollutes regression

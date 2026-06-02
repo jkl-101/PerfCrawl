@@ -57,6 +57,7 @@ from perfcrawl.constants import (
     BACKOFF_BASE_S,
     BACKOFF_MAX_RETRIES,
 )
+from perfcrawl.crawl import is_error_row
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import InScope
 from perfcrawl.models import PageResult, RunRecord
@@ -98,28 +99,6 @@ class _PolitenessGate:
 def _error_row(url: str) -> PageResult:
     """Build a tagged error ``PageResult`` (D-03): url + url_key, metrics null."""
     return PageResult(url=url, url_key=canonical_key(url))
-
-
-def _is_error_row(page: PageResult) -> bool:
-    """True iff ``page`` carries no measured data at all (D-03 error row).
-
-    WR-05: requires EVERY measurable metric to be null, not just
-    ``perf_score``/``lcp_ms`` — a 2xx page that measured TTFB/request_count/bytes
-    but for which Lighthouse returned no perf score or LCP is genuine data and
-    must not be classed an error row. Used by the WR-02 dedup tie-break so a
-    colliding error row never overwrites a real measured page.
-    """
-    return (
-        page.perf_score is None
-        and page.lcp_ms is None
-        and page.cls is None
-        and page.inp_proxy_tbt_ms is None
-        and page.ttfb_ms is None
-        and page.request_count is None
-        and page.total_bytes is None
-        and page.slowest_request_url is None
-        and page.slowest_request_ms is None
-    )
 
 
 def _measure_one(
@@ -233,7 +212,7 @@ def measure_pass(
     by_key: dict[str, PageResult] = {}
     for page in all_pages:
         existing = by_key.get(page.url_key)
-        if existing is not None and _is_error_row(page) and not _is_error_row(existing):
+        if existing is not None and is_error_row(page) and not is_error_row(existing):
             continue  # keep the measured page over a colliding error row
         by_key[page.url_key] = page
     unique_pages = list(by_key.values())
