@@ -55,18 +55,13 @@ from perfcrawl.orchestrator import MeasurementError, UserError, measure_url
 from perfcrawl.output import write_outputs
 from perfcrawl.store import init_db, write_run
 
-# When a Typer app has exactly one ``@app.command()``, Typer treats it as the
-# implicit root command — you'd invoke ``perfcrawl <url>`` instead of
-# ``perfcrawl measure <url>``. D-05 requires the explicit ``measure`` subcommand
-# verb (so future Phase 3 ``crawl`` / Phase 6 ``budget`` siblings live in the
-# same namespace), so we register a hidden no-op command alongside ``measure``
-# to force subcommand-style dispatch.
+# D-05 requires explicit subcommand verbs (``measure`` / ``crawl``, plus future
+# Phase 6 ``budget`` siblings) in one namespace. With two real ``@app.command()``s
+# registered, Typer already dispatches subcommand-style — ``perfcrawl measure
+# <url>`` / ``perfcrawl crawl <url>`` — so the earlier hidden ``_internal`` no-op
+# shim (needed only when a single command would otherwise collapse to the implicit
+# root command) is no longer required and has been removed (IN-04).
 app = typer.Typer(no_args_is_help=True, add_completion=False)
-
-
-@app.command(name="_internal", hidden=True)
-def _internal() -> None:
-    """Reserved (forces subcommand-style dispatch on the root app)."""
 
 # D-06: progress + errors → stderr; final result → stdout.
 err_console = Console(stderr=True)
