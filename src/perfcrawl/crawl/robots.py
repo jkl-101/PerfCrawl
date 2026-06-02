@@ -49,9 +49,12 @@ class RobotsGate:
         # 404/missing robots.txt = allow-all (Pitfall 4): no parser, no rules.
         self._rp = Protego.parse(robots_txt) if robots_txt else None
         # D-11: stricter-of crawl-delay vs the configured default (max wins).
+        # IN-02: Protego returns the raw numeric Crawl-delay, which may be an int;
+        # coerce to float so effective_delay always matches its declared type and
+        # never surprises a downstream isinstance(..., float) check or JSON typing.
         cd = self._rp.crawl_delay(user_agent) if self._rp else None
         self.effective_delay: float = (
-            max(default_delay, cd) if cd is not None else default_delay
+            float(max(default_delay, cd)) if cd is not None else float(default_delay)
         )
         # D-07: expose the Sitemap: directives (empty list when robots missing).
         self.sitemaps: list[str] = list(self._rp.sitemaps) if self._rp else []
