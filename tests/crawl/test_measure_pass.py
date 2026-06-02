@@ -63,7 +63,9 @@ def _canned_run(url: str) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
 
 
 def _in_scope(*urls: str) -> list[InScope]:
-    return [InScope(url=u, depth=0) for u in urls]
+    # WR-02: InScope now carries the discovery-computed canonical key; mirror that
+    # here so the pool reuses the same key discovery would have admitted.
+    return [InScope(url=u, depth=0, url_key=canonical_key(u)) for u in urls]
 
 
 def _patch_measure(monkeypatch, *, side_effects=None, record=None):

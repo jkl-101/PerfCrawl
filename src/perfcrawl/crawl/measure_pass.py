@@ -52,7 +52,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from perfcrawl.canonical import canonical_key
 from perfcrawl.constants import (
     BACKOFF_BASE_S,
     BACKOFF_MAX_RETRIES,
@@ -96,13 +95,18 @@ class _PolitenessGate:
             self._last_dispatch = time.monotonic()
 
 
-def _error_row(url: str) -> PageResult:
-    """Build a tagged error ``PageResult`` (D-03): url + url_key, metrics null."""
-    return PageResult(url=url, url_key=canonical_key(url))
+def _error_row(url: str, url_key: str) -> PageResult:
+    """Build a tagged error ``PageResult`` (D-03): url + url_key, metrics null.
+
+    WR-02: ``url_key`` is the discovery-computed canonical key carried through the
+    frontier — NEVER re-derived here — so a page's error-row sibling shares the
+    exact key discovery admitted to its visited set.
+    """
+    return PageResult(url=url, url_key=url_key)
 
 
 def _measure_one(
-    url: str, *, cfg: CrawlConfig, gate: _PolitenessGate
+    url: str, url_key: str, *, cfg: CrawlConfig, gate: _PolitenessGate
 ) -> tuple[PageResult, tuple[str, str] | None, RunRecord | None]:
     """Measure one URL via the unchanged ``measure_url`` seam.
 
@@ -127,7 +131,7 @@ def _measure_one(
                 attempt += 1
                 continue
             # All samples failed / non-retryable: tag-and-move-on (D-03).
-            return _error_row(url), None, None
+            return _error_row(url, url_key), None, None
         except KeyboardInterrupt:
             # Let measure_pass's partial-flush handler catch it (Pitfall 8) — a
             # Ctrl-C is a crawl-level signal, never a per-page error row.
@@ -141,9 +145,9 @@ def _measure_one(
             # thread and crash the whole crawl, discarding every page measured so
             # far — violating the D-03 "per-page failure never crashes the crawl"
             # invariant and the Pitfall-8 partial-flush promise.
-            return _error_row(url), None, None
+            return _error_row(url, url_key), None, None
         # measure_url returns a one-page RunRecord; lift its single PageResult.
-        page = run.pages[0] if run.pages else _error_row(url)
+        page = run.pages[0] if run.pages else _error_row(url, url_key)
         artifact = artifacts.get(page.url_key)
         return page, artifact, run
 
@@ -198,7 +202,7 @@ def measure_pass(
         # Lazily iterate map() so a KeyboardInterrupt during the pass still yields
         # every page produced up to the interrupt (Pitfall 8 partial-flush).
         results = executor.map(
-            lambda u: _measure_one(u.url, cfg=cfg, gate=gate), in_scope
+            lambda u: _measure_one(u.url, u.url_key, cfg=cfg, gate=gate), in_scope
         )
         for page, artifact, run in results:
             measured.append(page)

@@ -55,10 +55,17 @@ class InScope:
 
     ``url`` is the URL as discovered (never mutated — D-01); ``depth`` is the BFS
     distance from the seed (sitemap-seeded URLs are depth 0).
+
+    WR-02: ``url_key`` is the ``canonical_key`` computed ONCE at admit time and
+    carried through the frontier (the WR-06 discipline), so the measurement pass
+    reuses the discovery key for a page's error-row sibling rather than
+    re-deriving it — keeping the dedup map and store url_key uniqueness in lockstep
+    with discovery's visited set even if canonicalization is ever non-idempotent.
     """
 
     url: str
     depth: int
+    url_key: str
 
 
 class _LinkExtractor(HTMLParser):
@@ -178,7 +185,9 @@ def discover(
             errors.append(PageResult(url=url, url_key=key, status_code=status))
             continue
 
-        in_scope_results.append(InScope(url=url, depth=depth))
+        # WR-02: carry the admit-time canonical key into the in-scope record so the
+        # measurement pass reuses it instead of re-deriving it downstream.
+        in_scope_results.append(InScope(url=url, depth=depth, url_key=key))
         if depth < cfg.max_depth:  # CRAWL-04: don't expand past the depth bound
             html = getattr(resp, "text", "") or ""
             for href in _extract_links(html):
