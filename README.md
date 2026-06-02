@@ -10,12 +10,16 @@ AI explain what it finds, and writes results to the output formats you choose.
 
 ## Current capabilities (v0.1.0)
 
-PerfCrawl can audit **one URL at a time, end-to-end** today. Site-wide crawl,
-authentication, AI analysis, and Google Sheets output are scheduled for later
+PerfCrawl can audit **a single URL** or **crawl a whole site end-to-end** today.
+Authentication, AI analysis, and Google Sheets output are scheduled for later
 milestones (see [Roadmap](#roadmap)).
 
 What works **right now**:
 
+- **`perfcrawl crawl <url>`** — discovers same-origin pages (BFS over `<a href>`
+  links, augmented from `sitemap.xml`), respects `robots.txt` and per-host
+  politeness, provably terminates against crawler traps, then measures every
+  in-scope page into one multi-page run. See [Crawl a whole site](#crawl-a-whole-site).
 - **`perfcrawl measure <url>`** — runs a real Lighthouse 13.3.0 audit against a
   Playwright-launched Chrome attached over CDP, takes N samples, and reports the
   median.
@@ -72,9 +76,9 @@ cd lighthouse-worker && npm ci && cd ..      # Node worker (Lighthouse 13.3.0)
 uv run playwright install chromium           # Browser binary
 ```
 
-Phase 3 will lift the repo-checkout-only restriction via a configurable
-`PERFCRAWL_WORKER_DIR` env / CLI flag, at which point an installable wheel
-becomes a supported deployment.
+A later phase will lift the repo-checkout-only restriction (bundling or a
+configurable worker directory), at which point an installable wheel becomes a
+supported deployment.
 
 ## Quickstart
 
@@ -139,15 +143,74 @@ uv run perfcrawl measure https://example.com/ --samples 5 --json \
 - `2` — measurement error (worker crash, Chrome launch timeout, all samples
   failed). Actionable message on stderr, no raw traceback.
 
-### Looping over many URLs (today's workaround for the missing crawler)
+## Crawl a whole site
+
+`perfcrawl crawl <url>` discovers and measures an entire site from a single seed:
 
 ```bash
-while read url; do
-  uv run perfcrawl measure "$url" --samples 3 --json --output-dir audits >> all.jsonl
-done < urls.txt
+uv run perfcrawl crawl https://example.com/
 ```
 
-This is the manual stopgap until Phase 3 lands.
+It follows same-origin `<a href>` links breadth-first (seeded/augmented from
+`sitemap.xml` and `robots.txt` `Sitemap:` entries), drops out-of-scope and
+cross-domain links, obeys `robots.txt`, throttles per host, and measures each
+in-scope page through the same Lighthouse seam as `measure`. The result is **one
+multi-page run** — an aggregated one-row-per-page `result.csv` / `result.json`
+plus per-page raw Lighthouse artifacts under `output/<run_id>/`.
+
+Three independent bounds guarantee termination even on calendar/facet traps:
+`--max-pages`, `--max-depth`, and a per-base-path query-variant cap.
+
+> **Always dry-run first** to preview scope without measuring anything:
+>
+> ```bash
+> uv run perfcrawl crawl https://example.com/ --dry-run
+> ```
+>
+> This prints the in-scope URLs (and any error-tagged ones) and exits — no Chrome
+> launched, nothing written.
+
+A typical bounded, pattern-filtered crawl:
+
+```bash
+uv run perfcrawl crawl https://example.com/ \
+  --max-pages 50 \
+  --max-depth 2 \
+  --concurrency 4 \
+  --include '*/blog/*' \
+  --exclude '*/tag/*' \
+  --json --output-dir ./audits
+```
+
+### Crawl flags
+
+| Flag                   | Default  | Notes                                                                          |
+| ---------------------- | -------- | ------------------------------------------------------------------------------ |
+| `--max-pages`          | `100`    | Stop after this many in-scope pages (enqueue bound).                            |
+| `--max-depth`          | `3`      | BFS depth bound; sitemap seeds are depth 0.                                     |
+| `--concurrency`        | `2`      | Worker-pool size — one independent Chrome per worker.                           |
+| `--delay`              | `0.5`    | Minimum inter-request delay (s) per host; robots `Crawl-delay` wins if stricter. |
+| `--samples / -n`       | `1`      | Lighthouse samples per page (crawl defaults to 1; median reported).             |
+| `--include`            | (all)    | Glob to include, repeatable; no `--include` means all in-scope.                 |
+| `--exclude`            | (none)   | Glob to exclude, repeatable; exclude wins over include.                         |
+| `--include-subdomains` | off      | Treat sibling subdomains of the seed host as in-scope.                          |
+| `--no-sitemap`         | off      | Skip `sitemap.xml` / robots `Sitemap:` seeding.                                 |
+| `--ignore-robots`      | off      | **Owned sites only** — bypass `robots.txt` (emits a loud stderr warning).       |
+| `--dry-run`            | off      | Discover only: print in-scope URLs + error tags, measure nothing.              |
+| `--emulation`          | `mobile` | `mobile` or `desktop` form factor.                                             |
+| `--output-dir`         | `output` | Per-run artifacts land under `<output-dir>/<run_id>/`.                          |
+| `--json`               | off      | Emit the full multi-page `RunRecord` JSON to stdout.                            |
+
+> **Discovery limitation (D-02):** only static `<a href>` links are followed —
+> JavaScript-rendered navigation and `javascript:`-scheme links are **not**
+> discovered. Seed such pages directly or via `sitemap.xml`.
+
+### Exit codes (crawl)
+
+Same contract as `measure`: `0` success, `1` user error, `2` measurement error.
+A crawl that discovers pages but measures **zero** of them (all errored, or
+nothing in scope) exits `2` — a silent zero-data crawl is never reported as
+success.
 
 ## Roadmap
 
@@ -157,8 +220,8 @@ shippable increment.
 | Phase | Status | What it adds                                                              |
 | ----- | ------ | -------------------------------------------------------------------------- |
 | 1     | ✓      | Data model + SQLite store + RunDelta engine + canonical URL key            |
-| 2     | ✓      | `perfcrawl measure <url>` — single-URL end-to-end (you are here)           |
-| 3     |        | `perfcrawl crawl <url>` — link + sitemap discovery, robots.txt, politeness |
+| 2     | ✓      | `perfcrawl measure <url>` — single-URL end-to-end                          |
+| 3     | ✓      | `perfcrawl crawl <url>` — link + sitemap discovery, robots.txt, politeness (you are here) |
 | 4     |        | Authenticated crawls — login once, reuse session, denylist destructive links |
 | 5     |        | AI analysis — per-page Observation / Cause / Suggested Optimization        |
 | 6     |        | Google Sheets output, run-over-run regression flagging, all output formats |
