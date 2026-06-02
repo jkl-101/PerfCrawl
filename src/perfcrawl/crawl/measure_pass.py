@@ -84,15 +84,27 @@ class _PolitenessGate:
         self._last_dispatch = 0.0
 
     def wait(self) -> None:
-        """Block until at least ``min_delay_s`` has elapsed since the last dispatch."""
+        """Block until this worker's scheduled dispatch slot (min_delay-spaced).
+
+        WR-03: the sleep happens OUTSIDE the lock. Under the lock we only compute
+        this worker's wait window and advance the scheduled next-dispatch time;
+        the lock is then released so other workers can claim their (later) slots
+        and run their measurements concurrently. Holding the lock across the sleep
+        serialized the whole pool — with any non-zero ``--delay`` the concurrency
+        flag was silently ineffective because every worker queued behind the sleep.
+        Now only the *scheduling* is serialized; the actual measurements overlap
+        while the minimum inter-dispatch spacing is still honored.
+        """
         if self._min_delay <= 0:
             return
         with self._lock:
             now = time.monotonic()
-            elapsed = now - self._last_dispatch
-            if elapsed < self._min_delay:
-                time.sleep(self._min_delay - elapsed)
-            self._last_dispatch = time.monotonic()
+            wait_for = max(0.0, self._last_dispatch + self._min_delay - now)
+            # Advance from the later of "now" and the last scheduled dispatch so a
+            # burst of waiting workers gets distinct, monotonically-spaced slots.
+            self._last_dispatch = max(now, self._last_dispatch) + self._min_delay
+        if wait_for:
+            time.sleep(wait_for)
 
 
 def _error_row(url: str, url_key: str) -> PageResult:
