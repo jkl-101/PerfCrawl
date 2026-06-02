@@ -143,8 +143,21 @@ def discover(
     variants = VariantCounter(cfg.query_variant_cap)
     delay = robots.effective_delay
 
-    def _admit_seed(url: str) -> None:
-        """Gate + enqueue a depth-0 candidate (seed/sitemap) once."""
+    def _try_admit(url: str, depth: int) -> None:
+        """Gate + enqueue a candidate once (IN-05: ONE admission path for all).
+
+        The single key/seen → in_scope → passes_filters → robots → variant-cap →
+        seen.add → frontier.append sequence, shared by the depth-0 seed/sitemap
+        loop and the depth>0 child loop so the gating is defined exactly once and
+        cannot drift between the two (the hazard that made the WR-06 robots gate
+        need touching in two places).
+
+        WR-06: a robots-Disallow'd candidate is dropped here, BEFORE it consumes a
+        per-base-path variant-cap slot (CRAWL-03 intent). A sitemap commonly
+        advertises URLs robots.txt disallows; admitting them to the frontier and
+        the cap would crowd out crawlable siblings. The main-loop can_fetch stays
+        as defense-in-depth.
+        """
         key = canonical_key(url)
         if not key or key in seen:
             return
@@ -152,23 +165,19 @@ def discover(
             return
         if not passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
             return
-        # WR-06: drop a robots-Disallow'd candidate as early as scope does
-        # (CRAWL-03 intent), BEFORE it consumes a per-base-path variant-cap slot.
-        # A sitemap commonly advertises URLs robots.txt disallows; admitting them
-        # to the frontier (and the variant cap) would crowd out crawlable siblings
-        # under a tight cap. The main-loop can_fetch check stays as defense-in-depth.
         if not robots.can_fetch(url):
             return
-        if not variants.admit(url):
+        if not variants.admit(url):  # D-08: per-base-path variant cap
             return
         seen.add(key)
-        frontier.append((url, key, 0))
+        # WR-06: carry the already-computed key through the frontier (compute once).
+        frontier.append((url, key, depth))
 
     # --- depth-0 seeds: the seed itself + (optional) sitemap-sourced URLs ---
-    _admit_seed(seed)
+    _try_admit(seed, 0)
     if cfg.use_sitemap:
         for sm_url in _sitemap_seeds(seed, robots=robots, fetch=fetch):
-            _admit_seed(sm_url)
+            _try_admit(sm_url, 0)
 
     fetched_any = False  # WR-04: gates the per-host delay to BEFORE the next fetch
     while frontier:
@@ -203,26 +212,7 @@ def discover(
             html = getattr(resp, "text", "") or ""
             for href in _extract_links(html):
                 child = urldefrag(urljoin(url, href)).url  # Pitfall 6
-                ckey = canonical_key(child)
-                if not ckey or ckey in seen:
-                    continue
-                if not in_scope(
-                    child, seed, include_subdomains=cfg.include_subdomains
-                ):
-                    continue
-                if not passes_filters(
-                    child, includes=cfg.includes, excludes=cfg.excludes
-                ):
-                    continue
-                # WR-06: gate robots Disallow at admit time so a disallowed child
-                # is never enqueued or counted against the per-base-path variant
-                # cap; the main-loop can_fetch stays as defense-in-depth.
-                if not robots.can_fetch(child):
-                    continue
-                if not variants.admit(child):  # D-08: per-base-path variant cap
-                    continue
-                seen.add(ckey)
-                # WR-06: carry the already-computed child key through the frontier.
-                frontier.append((child, ckey, depth + 1))
+                # IN-05: children go through the SAME admission path as the seeds.
+                _try_admit(child, depth + 1)
 
     return in_scope_results, errors
