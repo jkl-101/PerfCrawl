@@ -26,6 +26,7 @@ CSV column ``inp_proxy_tbt_ms`` (Phase 2 plan 04 Task 1), this forms a
 4-layer defense-in-depth against the labeling drift threat.
 """
 
+import json
 import os
 import sqlite3
 import sys
@@ -703,3 +704,86 @@ def crawl(
     if session_lost:
         raise typer.Exit(code=int(ExitCode.AUTH_ERROR))
     # Implicit exit 0 (success-or-partial per D-13).
+
+
+@app.command()
+def login(
+    url: str = typer.Argument(
+        ..., help="URL to open for an interactive login (e.g. the site's /login/ page)."
+    ),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        help="Write the captured Playwright storage_state JSON here. This file is a "
+        "FULL logged-in session — a credential-equivalent secret. Keep it gitignored "
+        "(*.authstate.json is) and feed it to `crawl --auth-state <path>`.",
+    ),
+) -> None:
+    """Open a HEADED browser at ``URL``, let the user log in by hand, capture the session.
+
+    The SSO/MFA escape hatch (D-04): some logins cannot be scripted (OAuth popups,
+    2FA prompts, CAPTCHAs). ``perfcrawl login`` launches a VISIBLE Chrome on the
+    reused CDP-port seam, navigates to ``URL``, and waits for the user to finish
+    logging in and press Enter. It then captures the DEFAULT context's
+    ``storage_state`` and writes it to ``--out`` — the portable session currency
+    (D-02) that ``crawl --auth-state`` replays.
+
+    The captured file is a credential-equivalent secret (it IS the live session);
+    ``*.authstate.json`` is gitignored so it is never committed (D-07).
+    """
+    from playwright.sync_api import sync_playwright
+
+    from perfcrawl.auth import validate_storage_state
+
+    # Headed launch — the ONLY difference from the audit launch (spike req #3).
+    chrome, port, user_data_dir = _launch_chrome_with_cdp_port(headless=False)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            # DEFAULT context (contexts[0]) — the same context a later audit's
+            # Lighthouse CDP target navigates in (D-02/D-03). Capturing here means
+            # the saved session replays correctly under `crawl --auth-state`.
+            ctx = browser.contexts[0]
+            page = ctx.new_page()
+            page.goto(url, wait_until="load")
+            err_console.print(
+                "[bold]Log in in the opened browser window, then press Enter here "
+                "to capture the session...[/bold]"
+            )
+            # Block until the user finishes the interactive login. Stdin prompt on
+            # stderr-adjacent flow (users never run commands; they act in the UI).
+            try:
+                input()
+            except (EOFError, KeyboardInterrupt):
+                # No TTY / Ctrl-C: capture whatever session exists rather than crash.
+                err_console.print("[yellow]no Enter received — capturing current session[/yellow]")
+            state = ctx.storage_state()
+            browser.close()  # disconnect only — the Popen'd Chrome stays alive
+    except Exception as e:  # noqa: BLE001 — surface a clean message, never a traceback
+        err_console.print(f"[red]error:[/red] could not capture a session: {e}")
+        raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
+    finally:
+        # Pitfall 5: kill + reap Chrome + rmtree the temp profile. For a headed
+        # `uv run`-style re-exec, also process-group-kill so no orphaned Chrome
+        # survives (spike requirement #4) — best-effort over the direct child.
+        try:
+            os.killpg(os.getpgid(chrome.pid), 15)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        _teardown_chrome(chrome, user_data_dir)
+
+    # Validate before writing so an empty/failed login does not persist a useless
+    # (and misleading) state file. AuthError -> exit 3.
+    try:
+        validate_storage_state(state)
+    except AuthError as e:
+        err_console.print(f"[red]auth failed:[/red] {e}")
+        raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(state, indent=2))
+    err_console.print(
+        f"[green]session captured[/green] → {out}\n"
+        "[yellow]This file is a credential-equivalent secret (gitignored). "
+        "Feed it to `perfcrawl crawl <url> --auth-state " + str(out) + "`.[/yellow]"
+    )

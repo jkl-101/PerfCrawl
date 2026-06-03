@@ -62,7 +62,7 @@ class UserError(Exception):
     """
 
 
-def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
+def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.Popen, int, Path]:
     """Launch Chromium with ``--remote-debugging-port=0`` and read the resolved port.
 
     Per Pitfall 1: Chrome writes the kernel-picked port to
@@ -74,6 +74,13 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
     rather than the persistent-context launcher so the orchestrator can call
     ``browser.new_context()`` for RUN-03 cold-cache cycling (a persistent-context
     Browser has no ``.new_context()`` method).
+
+    ``headless`` (Phase 4 — D-04 `perfcrawl login`): defaults to ``True`` (the
+    measurement audit launch is always headless). The ``login`` subcommand passes
+    ``headless=False`` so the user can complete an SSO/MFA login by hand in a
+    visible window — the ONLY difference from the audit launch (spike requirement
+    #3: the Chrome lifecycle seam is reused unchanged otherwise). All existing
+    callers keep the headless default, so the audit path is byte-for-byte unchanged.
 
     Returns ``(chrome_proc, port, user_data_dir)``. The caller MUST wrap the use
     of the returned values in try/finally that kills the proc and rmtree's the
@@ -102,10 +109,13 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
             chrome_path,
             f"--user-data-dir={user_data_dir}",
             "--remote-debugging-port=0",
-            "--headless=new",
             "--no-first-run",
             "--no-default-browser-check",
         ]
+        # Headless for the audit launch (default); headed only for `perfcrawl
+        # login` so the user can complete an interactive SSO/MFA login by hand.
+        if headless:
+            argv.insert(3, "--headless=new")
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.DEVNULL,

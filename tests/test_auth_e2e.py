@@ -103,3 +103,77 @@ def test_authenticated_audit_inherits_session(django_auth_fixture):
     )
     assert "/login/" not in landed, f"audit was redirected to login ({landed!r}) — session loss"
     assert run_record.auth_used is True
+
+
+@pytest.mark.e2e
+def test_no_creds_in_artifacts(django_auth_fixture, tmp_path, monkeypatch):
+    """A full authenticated crawl leaves ZERO credential hits in output/ (Pitfall 3).
+
+    The concrete AUTH-04 / D-07 grep guard: run ``perfcrawl crawl <url> --login-url
+    ... --user-sel ...`` against the Django fixture with ``admin``/``admin123`` from
+    env, let it write its output tree, then walk every file under output/ and assert
+    the literal password ``admin123`` appears NOWHERE — not in result.json, not in
+    a saved Lighthouse JSON/HTML artifact, not in the SQLite DB.
+    """
+    from typer.testing import CliRunner
+
+    from perfcrawl.cli import app
+    from perfcrawl.lighthouse_worker import preflight
+
+    base = django_auth_fixture.rstrip("/")
+    login_url = f"{base}/login/?next=/dashboard/"
+    dashboard_url = f"{base}/dashboard/"
+    password = "admin123"
+
+    try:
+        preflight()
+    except Exception as exc:  # noqa: BLE001 — environment gate, not a test failure
+        pytest.skip(f"lighthouse worker not available: {exc}")
+
+    monkeypatch.setenv("PERFCRAWL_USERNAME", "admin")
+    monkeypatch.setenv("PERFCRAWL_PASSWORD", password)
+
+    output_dir = tmp_path / "output"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            dashboard_url,
+            "--login-url",
+            login_url,
+            "--user-sel",
+            "#username",
+            "--pass-sel",
+            "#password",
+            "--submit-sel",
+            "#submit",
+            "--max-pages",
+            "2",
+            "--delay",
+            "0",
+            "--ignore-robots",
+            "--output-dir",
+            str(output_dir),
+        ],
+        catch_exceptions=False,
+    )
+    # The crawl must have produced an output tree (exit 0 success or 3 partial both
+    # write artifacts; a USER/MEASUREMENT error would not prove the no-creds claim).
+    assert result.exit_code in (0, 3), f"crawl exited {result.exit_code}\nSTDOUT:\n{result.stdout}"
+    assert output_dir.exists(), "crawl wrote no output tree"
+
+    # The decisive AUTH-04 check: zero password hits across the ENTIRE output tree.
+    offenders = []
+    for path in output_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        blob = path.read_bytes()
+        if password.encode() in blob:
+            offenders.append(str(path.relative_to(output_dir)))
+    assert offenders == [], f"credential leaked into artifacts: {offenders}"
+
+    # And the redaction placeholder proves the scrubber actually ran on a sink
+    # (the login page's rendered password field, if captured, becomes REDACTED).
+    # Not asserted hard (the dashboard audit may carry no form field), but the
+    # zero-leak assertion above is the load-bearing guard.
