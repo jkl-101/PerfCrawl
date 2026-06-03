@@ -245,9 +245,23 @@ def measure_url(
                 if auth_state.get("cookies"):
                     default_ctx.add_cookies(auth_state["cookies"])
                 for origin in auth_state.get("origins", []):
+                    # CR-02 (AUTH-04 reliability): a hand-edited/--auth-state file
+                    # can pass validate_storage_state's presence-only check yet
+                    # carry malformed origins. Skip-tolerate (continue) each bad
+                    # entry — never raise KeyError/TypeError — to honor the
+                    # module's "Never crashes on garbage" promise.
+                    if not isinstance(origin, dict) or not origin.get("origin"):
+                        continue
+                    origin_url = origin.get("origin")
                     pg = default_ctx.new_page()
-                    pg.goto(origin["origin"], wait_until="commit")
+                    pg.goto(origin_url, wait_until="commit")
                     for item in origin.get("localStorage", []):
+                        if (
+                            not isinstance(item, dict)
+                            or "name" not in item
+                            or "value" not in item
+                        ):
+                            continue
                         pg.evaluate(
                             "([k, v]) => localStorage.setItem(k, v)",
                             [item["name"], item["value"]],
