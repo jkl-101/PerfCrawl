@@ -14,7 +14,9 @@ Like ``tests/test_canonical.py``, the predicates NEVER raise, so this file is
 One test function per behavior; docstrings lead with the requirement/decision IDs.
 """
 
-from perfcrawl.crawl.scope import VariantCounter, in_scope, passes_filters
+from perfcrawl.constants import DEFAULT_DENY_PATTERNS
+from perfcrawl.crawl.config import CrawlConfig
+from perfcrawl.crawl.scope import VariantCounter, in_scope, is_denied, passes_filters
 
 SEED = "https://www.studyhalo.com"
 
@@ -152,3 +154,48 @@ def test_variant_cap_never_raises_on_malformed():
     counter = VariantCounter(cap=1)
     result = counter.admit("::::not a url")
     assert isinstance(result, bool)
+
+
+# --- is_denied: always-on destructive-link denylist (D-05) -----------------
+
+
+def test_is_denied():
+    """D-05 / T-04-04 / T-04-06: case-insensitive substring deny, fail-CLOSED.
+
+    Pins the full <behavior> contract for the always-on destructive-link guard:
+      - a built-in token (``/logout/``) is denied against DEFAULT_DENY_PATTERNS
+      - the match is case-insensitive (``/LOGOUT`` vs ``logout``)
+      - a benign path (``/dashboard/``) is NOT denied
+      - garbage input (``None``) fails CLOSED → True (deny what we cannot evaluate)
+      - an empty pattern set denies nothing (no-op)
+    """
+    # built-in match (session-ending token in the path)
+    assert is_denied("https://x.com/account/logout/", patterns=DEFAULT_DENY_PATTERNS) is True
+    # case-insensitive: /LOGOUT matches the lowercase ``logout`` pattern
+    assert is_denied("https://x.com/LOGOUT", patterns={"logout"}) is True
+    # benign path is NOT denied
+    assert is_denied("https://x.com/dashboard/", patterns=DEFAULT_DENY_PATTERNS) is False
+    # fail-CLOSED on garbage: None cannot be evaluated → deny (the INVERSE of in_scope)
+    assert is_denied(None, patterns=DEFAULT_DENY_PATTERNS) is True
+    # empty pattern set denies nothing
+    assert is_denied("https://x.com/page", patterns=[]) is False
+
+
+def test_is_denied_user_deny_extends_builtins():
+    """D-05: CrawlConfig().deny_patterns defaults to the built-ins; --deny extends.
+
+    The default config carries exactly the built-in set; a config built with an
+    extra pattern denies a URL the built-ins alone would have allowed, while still
+    denying the built-in tokens (extension, not replacement).
+    """
+    default_cfg = CrawlConfig()
+    assert set(default_cfg.deny_patterns) == set(DEFAULT_DENY_PATTERNS)
+
+    # --deny extends: a custom token (e.g. ``/billing``) plus the built-ins
+    extended = CrawlConfig(deny_patterns=[*DEFAULT_DENY_PATTERNS, "billing"])
+    # the user token now denies a URL the built-ins would have allowed
+    assert is_denied("https://x.com/billing/cancel", patterns=extended.deny_patterns) is True
+    # the built-ins are still in force under the extended set
+    assert is_denied("https://x.com/account/logout/", patterns=extended.deny_patterns) is True
+    # a benign URL is still allowed
+    assert is_denied("https://x.com/dashboard", patterns=extended.deny_patterns) is False
