@@ -88,6 +88,34 @@ def passes_filters(url: str, *, includes: list[str], excludes: list[str]) -> boo
         return False
 
 
+def is_denied(url: str, *, patterns) -> bool:
+    """True iff ``url`` matches any deny pattern (case-insensitive substring; D-05).
+
+    Always-on destructive-link guard: a URL whose lowercased form contains ANY
+    lowercased deny pattern as a substring is denied (e.g. ``/account/logout/``
+    matches ``logout``). ``patterns`` is the always-on built-in set
+    (``DEFAULT_DENY_PATTERNS``) plus any user ``--deny`` extensions carried on
+    ``CrawlConfig.deny_patterns``. Substring (not glob) is deliberate — it matches
+    the "logout/delete/admin token anywhere in the path" intent directly without
+    forcing ``*logout*`` (RESEARCH Pattern 3 / A3).
+
+    CRITICAL fail-CLOSED divergence from the rest of this predicate family: every
+    OTHER helper here (``in_scope``, ``passes_filters``, ``VariantCounter.admit``)
+    fails to ``return False`` — i.e. a garbage URL is conservatively OUT of scope /
+    not admitted. ``is_denied`` fails to ``return True`` — a URL we cannot evaluate
+    is conservatively DENIED, because "denied" is the safe posture for a
+    destructive-link guard (D-05 / threat T-04-06 / V5). This inversion is
+    intentional; do not "fix" it to ``return False``.
+    """
+    try:
+        low = url.lower()
+        return any(pat.lower() in low for pat in patterns)
+    except Exception:
+        # Fail-CLOSED (D-05 / T-04-06): deny what we cannot evaluate. This is the
+        # DELIBERATE inverse of the family's fail-open-to-False fallback above.
+        return True
+
+
 def _base_path(url: str) -> str:
     """Base-path key for the variant cap: scheme+host+path, query/fragment dropped.
 
