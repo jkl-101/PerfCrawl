@@ -9,7 +9,11 @@ metric, a NEW page, a REMOVED page, and a metric present on only one side
 """
 
 import json
+import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
 
@@ -24,12 +28,40 @@ from perfcrawl.models import (
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 LH_FIXTURES_DIR = FIXTURES_DIR / "lighthouse"
+# The Phase-3 crawl fixture site (HTML pages the BFS walks). Reused here so the
+# root-level CLI crawl tests (tests/test_cli_crawl.py) can hit a real-but-local
+# HTTP origin without duplicating the fixture server in tests/crawl/conftest.py.
+CRAWL_SITE_DIR = Path(__file__).parent / "crawl" / "fixtures" / "site"
 
 
 @pytest.fixture
 def fixtures_dir() -> Path:
     """Absolute path to tests/fixtures/."""
     return FIXTURES_DIR
+
+
+@pytest.fixture
+def local_server() -> Iterator[str]:
+    """Serve the Phase-3 crawl fixture site over a local HTTP thread; yield base URL.
+
+    A root-level mirror of ``tests/crawl/conftest.py``'s ``local_server`` so the
+    CLI ``crawl`` tests at ``tests/test_cli_crawl.py`` can drive real discovery
+    against ``tests/crawl/fixtures/site/`` with no network. Ephemeral kernel-picked
+    port; daemon thread; clean shutdown on teardown. ``SimpleHTTPRequestHandler``
+    returns 404 for any off-disk path (the discovery error-tagging target).
+    """
+    handler = partial(SimpleHTTPRequestHandler, directory=str(CRAWL_SITE_DIR))
+    handler.log_message = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    host, port = server.server_address[0], server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.fixture

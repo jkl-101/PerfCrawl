@@ -85,3 +85,42 @@ class ExitCode(IntEnum):
     SUCCESS = 0  # page measured (including non-2xx — D-13 partial)
     USER_ERROR = 1  # bad URL, bad flags, can't write output dir, Typer usage error
     MEASUREMENT_ERROR = 2  # all N samples failed, Chrome won't launch, etc.
+
+
+# --- Phase 3 crawl defaults (D-08 / D-09 / D-10 / D-12) ---------------------
+# The ONE editable place for every Phase-3 crawl tunable. `crawl/config.py`'s
+# CrawlConfig reads each of these as a dataclass-field default; the discovery
+# BFS, the measurement worker pool, the politeness gate, and the sitemap parser
+# all import from HERE — never inline a page cap, depth, delay, or UA string.
+# Phase 1 grep-asserts this discipline for TRACKING_PARAM_DENYLIST; Phase 2 for
+# the timeout/samples/version/exit-codes/INP-label; Phase 3 extends it to these.
+
+# D-09: bare `perfcrawl crawl <url>` measures at most this many in-scope pages.
+DEFAULT_MAX_PAGES: int = 100  # D-09 conservative default; flag-overridable
+
+# D-09: BFS depth bound (sitemap seeds = depth 0); finite tree height.
+DEFAULT_MAX_DEPTH: int = 3  # D-09
+
+# D-09: per-host concurrency == Chrome-pool size (one Chrome per worker, A6).
+DEFAULT_CONCURRENCY: int = 2  # D-09 per-host concurrency = Chrome pool size
+
+# D-09: minimum inter-request delay (seconds) between polite GETs to one host.
+DEFAULT_MIN_DELAY_S: float = 0.5  # D-09 min inter-request delay
+
+# D-08: per-base-path distinct query-variant cap — bounds facet/calendar traps.
+DEFAULT_QUERY_VARIANT_CAP: int = 10  # D-08 per-base-path distinct query-variant cap
+
+# D-10: crawl defaults to a single sample (measure keeps DEFAULT_SAMPLES_N = 3).
+DEFAULT_CRAWL_SAMPLES_N: int = 1  # D-10
+
+# D-12: exponential-backoff base (seconds) for 429/503 retries.
+BACKOFF_BASE_S: float = 1.0  # D-12 exponential backoff base
+
+# D-12: retries before a URL is tagged an error and abandoned (never hammer).
+BACKOFF_MAX_RETRIES: int = 3  # D-12
+
+# Pitfall 7: recursion bound on nested <sitemapindex> expansion (trap defense).
+SITEMAP_MAX_RECURSION_DEPTH: int = 5  # Pitfall 7 sitemap-trap bound
+
+# The User-Agent the discovery pass and robots-matching identify as.
+CRAWLER_USER_AGENT: str = "PerfCrawl/0.1 (+https://github.com/jkl-101/PerfCrawl)"

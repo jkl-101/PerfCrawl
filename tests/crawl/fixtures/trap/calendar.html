@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Calendar trap</title>
+  </head>
+  <body>
+    <h1>Events calendar</h1>
+    <!--
+      A synthetic crawl trap: every render links to "next" dated/faceted URLs
+      that themselves link onward forever. Plan 02's termination test serves a
+      handler that templates this page so each page emits N+1 NEW dated/faceted
+      URLs (e.g. /calendar?month=2027-02, /calendar?month=2027-03, ...). The
+      crawl MUST still terminate: max-depth + max-pages + the per-base-path
+      query-variant cap (D-08) together bound it. These static links seed that
+      shape; the dynamic N+1 generation lives in the plan-02 server handler.
+    -->
+    <nav>
+      <a href="calendar.html?month=2027-01">January 2027</a>
+      <a href="calendar.html?month=2027-02">February 2027</a>
+      <a href="calendar.html?month=2027-03">March 2027</a>
+      <a href="calendar.html?month=2027-04&view=week">April 2027 (week)</a>
+      <a href="calendar.html?month=2027-05&view=day&tz=utc">May 2027 (day)</a>
+    </nav>
+  </body>
+</html>
