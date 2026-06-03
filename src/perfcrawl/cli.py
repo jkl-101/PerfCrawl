@@ -29,6 +29,7 @@ CSV column ``inp_proxy_tbt_ms`` (Phase 2 plan 04 Task 1), this forms a
 import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import typer
@@ -80,6 +81,37 @@ def _format_metric_sample(
     if sample is None or sample.median is None:
         return "-"
     return fmt.format(sample.median)
+
+
+def _origin_of(url: str) -> str:
+    """Return the ``scheme://netloc`` origin of ``url``, or ``url`` unchanged
+    when it has no parseable scheme+host (so callers degrade safely)."""
+    parts = urlsplit(url)
+    if parts.scheme and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return url
+
+
+def _relativize_url(url: str, origin: str) -> str:
+    """Strip the shared ``origin`` from ``url`` for compact crawl-table display.
+
+    A whole-site crawl shares one origin, so the per-row URL is just noise once
+    the origin lives in the table header. Returns the path (+query/fragment)
+    when ``url`` is on ``origin``; the site root collapses to ``/``. URLs on a
+    different origin — or that don't parse to a scheme+host — fall back to the
+    full URL so cross-origin / malformed rows stay unambiguous.
+    """
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return url
+    if f"{parts.scheme}://{parts.netloc}" != origin:
+        return url
+    rel = parts.path or "/"
+    if parts.query:
+        rel = f"{rel}?{parts.query}"
+    if parts.fragment:
+        rel = f"{rel}#{parts.fragment}"
+    return rel
 
 
 def _render_human_table(run, *, samples: int, run_dir: Path) -> None:
@@ -150,7 +182,8 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
         )
         return
 
-    table = Table(title=f"perfcrawl crawl: {run.target}")
+    origin = _origin_of(run.target)
+    table = Table(title=f"perfcrawl crawl · {origin}")
     table.add_column("Page", style="bold", overflow="fold")
     table.add_column("Perf", justify="right")
     table.add_column("LCP (ms)", justify="right")
@@ -164,7 +197,7 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
         if is_error_row(page):
             errors += 1
             table.add_row(
-                page.url,
+                _relativize_url(page.url, origin),
                 "[red]error[/red]",
                 "-",
                 "-",
@@ -174,7 +207,7 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
         else:
             measured += 1
             table.add_row(
-                page.url,
+                _relativize_url(page.url, origin),
                 _format_scalar(page.perf_score),
                 _format_metric_sample(page.lcp_ms),
                 _format_metric_sample(page.inp_proxy_tbt_ms),
