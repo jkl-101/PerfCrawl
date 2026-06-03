@@ -719,3 +719,85 @@ def test_orchestrator_source_has_no_shell_invocation():
             # Permit the pattern only inside string literals — the grep guard at
             # the plan level filters comments only; we mirror that here.
             assert False, f"shell-invocation kwarg present at line {lineno}: {line!r}"
+
+
+# ---------------------------------------------------------------------------
+# CR-02 (AUTH-04 reliability): malformed-but-non-empty `origins` in an
+# `--auth-state` file passes validate_storage_state's presence-only check, then
+# reaches the origins replay in measure_url. The replay MUST skip malformed
+# entries (continue), never raise KeyError/TypeError — "Never crashes on garbage".
+# ---------------------------------------------------------------------------
+
+
+class _RecordingPage:
+    """A default-context page whose goto/evaluate record their args."""
+
+    def __init__(self, recorder: dict) -> None:
+        self._rec = recorder
+
+    def goto(self, origin, **_kw):
+        self._rec.setdefault("goto", []).append(origin)
+
+    def evaluate(self, _script, args):
+        self._rec.setdefault("evaluate", []).append(args)
+
+    def close(self):
+        return None
+
+
+class _DefaultCtxBrowser:
+    """Fake Browser with a recording DEFAULT context (contexts[0]) for the
+    auth_state origins replay, plus new_context() for the per-sample loop."""
+
+    def __init__(self) -> None:
+        self.replay = {}
+        default_ctx = SimpleNamespace(
+            add_cookies=lambda cookies: self.replay.setdefault("cookies", cookies),
+            new_page=lambda: _RecordingPage(self.replay),
+        )
+        self.contexts: list = [default_ctx]
+
+    def new_context(self):
+        c = _FakeContext()
+        self.contexts.append(c)
+        return c
+
+
+def test_measure_url_skips_malformed_origins_entries(monkeypatch):
+    """CR-02: a non-empty but malformed `origins` list is skip-tolerated; a
+    well-formed entry mixed in is still replayed; no exception escapes."""
+    from perfcrawl.orchestrator import measure_url
+    import perfcrawl.orchestrator as orch
+
+    browser = _DefaultCtxBrowser()
+    _install_orchestrator_stubs(monkeypatch, browser=browser)
+    monkeypatch.setattr(orch, "run_one_sample", lambda **kw: _stub_worker_envelope())
+
+    auth_state = {
+        "cookies": [{"name": "sid", "value": "abc"}],
+        "origins": [
+            "not-a-dict",  # entry is not a dict at all
+            {"localStorage": [{"name": "k", "value": "v"}]},  # missing "origin"
+            {  # well-formed origin with one bad + one good localStorage item
+                "origin": "https://example.com",
+                "localStorage": [
+                    {"name": "good", "value": "1"},  # well-formed
+                    "bad-item",  # not a dict
+                    {"name": "no-value"},  # missing "value"
+                ],
+            },
+        ],
+    }
+
+    # Before the fix this raises KeyError/TypeError; after, it completes.
+    run_record, _ = measure_url(
+        url="https://example.com/",
+        samples=1,
+        emulation="mobile",
+        auth_state=auth_state,
+    )
+
+    # Only the one well-formed origin was navigated to.
+    assert browser.replay.get("goto") == ["https://example.com"]
+    # Only the one well-formed localStorage item was replayed.
+    assert browser.replay.get("evaluate") == [["good", "1"]]
