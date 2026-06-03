@@ -608,6 +608,14 @@ def crawl(
         except AuthError as e:
             err_console.print(scrub(f"[red]auth failed:[/red] {e}"))
             raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
+        except Exception as e:
+            # Defense-in-depth (AUTH-04): even a leaked NON-AuthError (e.g. a raw
+            # Playwright exception that slipped a wrap) is scrubbed via the
+            # creds-seeded `scrub` and mapped to AUTH_ERROR — never an unscrubbed
+            # Typer traceback. Runs AFTER the AuthError arm so AuthError keeps its
+            # own message; `from None` suppresses the chain.
+            err_console.print(scrub(f"[red]auth failed:[/red] {e}"))
+            raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
 
     # --- Measurement pass: bounded pool over the unchanged measure_url seam. ---
     # CR-01: carry the robots-aware effective delay into the measurement pass so a
