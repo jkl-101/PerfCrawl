@@ -371,6 +371,53 @@ def test_auth_error_exits_three(monkeypatch, tmp_path: Path, local_server: str) 
     assert result.exit_code == ExitCode.AUTH_ERROR, result.stdout + result.stderr
 
 
+def test_non_autherror_leak_is_scrubbed_and_exits_three(
+    monkeypatch, tmp_path: Path, local_server: str
+) -> None:
+    """Defense-in-depth (Task 2 / AUTH-04): a NON-AuthError leak from the
+    auth-resolution path is scrubbed and mapped to AUTH_ERROR, with neither the
+    sentinel username nor password literal in the combined output."""
+    sentinel_user = "SENTINEL_USER"
+    sentinel_pass = "SENTINEL_PASS"
+
+    # Creds enter via env ONLY (D-07); this seeds the CLI's scrubber.
+    monkeypatch.setenv("PERFCRAWL_USERNAME", sentinel_user)
+    monkeypatch.setenv("PERFCRAWL_PASSWORD", sentinel_pass)
+
+    _patch_measure(monkeypatch)
+
+    def _leak(*args, **kwargs):
+        # A raw (non-AuthError) exception carrying the live password substring —
+        # exactly the wrong-selector Playwright failure shape before CR-01, or
+        # any future leak. The catch-all must redact it.
+        raise RuntimeError(f"boom user={sentinel_user} pw={sentinel_pass}")
+
+    monkeypatch.setattr("perfcrawl.cli._resolve_crawl_auth", _leak)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--login-url",
+            local_server + "/login/",
+            "--user-sel",
+            "#username",
+            "--pass-sel",
+            "#password",
+            "--submit-sel",
+            "#submit",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert result.exit_code == int(ExitCode.AUTH_ERROR), combined
+    assert sentinel_user not in combined
+    assert sentinel_pass not in combined
+
+
 def test_auth_state_and_login_url_mutually_exclusive(
     monkeypatch, tmp_path: Path, local_server: str
 ) -> None:
