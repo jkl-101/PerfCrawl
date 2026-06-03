@@ -296,6 +296,104 @@ def test_crawl_is_registered() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 4 (AUTH-01/AUTH-04): auth/deny flags, env-only creds, AUTH_ERROR exit
+# --------------------------------------------------------------------------- #
+
+
+def _crawl_command_params() -> dict:
+    """Introspect the ``crawl`` command's parameters by name → Click Parameter."""
+    from typer.main import get_command
+
+    group = get_command(app)  # a Click Group with `measure`/`crawl` subcommands
+    crawl_cmd = group.commands["crawl"]
+    return {p.name: p for p in crawl_cmd.params}
+
+
+def test_crawl_has_auth_and_deny_flags() -> None:
+    """``crawl --help`` exposes the new auth + deny flags (D-01/D-05)."""
+    result = runner.invoke(app, ["crawl", "--help"])
+    assert result.exit_code == 0
+    for flag in ("--login-url", "--user-sel", "--pass-sel", "--submit-sel",
+                 "--auth-state", "--deny", "--success-text", "--success-url"):
+        assert flag in result.stdout, f"missing auth/deny flag: {flag}"
+
+
+def test_crawl_has_no_password_option() -> None:
+    """T-04-10: the password (and username) must NEVER be a Typer/CLI Option.
+
+    argv is visible in ``ps``/shell history, so credentials are env-only (D-07).
+    Introspect the command's parameters and assert no option carries a
+    password/username — the only credential intake is ``os.environ``.
+    """
+    params = _crawl_command_params()
+    # No parameter NAME mentions password/username.
+    for name in params:
+        assert "password" not in name.lower(), f"forbidden password param: {name}"
+        assert "username" not in name.lower(), f"forbidden username param: {name}"
+    # No option string flags a password/username either.
+    for param in params.values():
+        for opt in getattr(param, "opts", []) + getattr(param, "secondary_opts", []):
+            low = opt.lower()
+            assert "password" not in low and "passwd" not in low, f"forbidden opt: {opt}"
+            assert "username" not in low, f"forbidden opt: {opt}"
+
+
+def test_auth_error_exits_three(monkeypatch, tmp_path: Path, local_server: str) -> None:
+    """A failed auth resolution maps to ExitCode.AUTH_ERROR (3) (D-15)."""
+    from perfcrawl.auth import AuthError
+
+    _patch_measure(monkeypatch)
+
+    def _boom(*args, **kwargs):
+        raise AuthError("login could not be confirmed")
+
+    # Patch the CLI's auth resolver so no real Chrome launches.
+    monkeypatch.setattr("perfcrawl.cli._resolve_crawl_auth", _boom)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--login-url",
+            local_server + "/login/",
+            "--user-sel",
+            "#username",
+            "--pass-sel",
+            "#password",
+            "--submit-sel",
+            "#submit",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.AUTH_ERROR, result.stdout + result.stderr
+
+
+def test_auth_state_and_login_url_mutually_exclusive(
+    monkeypatch, tmp_path: Path, local_server: str
+) -> None:
+    """``--auth-state`` + ``--login-url`` together is a user error (D-01)."""
+    calls = _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--login-url",
+            local_server + "/login/",
+            "--auth-state",
+            str(tmp_path / "session.authstate.json"),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.USER_ERROR
+    assert calls == []  # never reached measurement
+
+
+# --------------------------------------------------------------------------- #
 # URL truncation for the crawl summary table (260603-fos)
 #
 # A whole-site crawl shares one origin, so the per-row URL collapses to its

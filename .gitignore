@@ -25,6 +25,16 @@ htmlcov/
 # (RESEARCH § Security Domain "Sensitive URL leakage in committed output/")
 output/
 
+# Credential-equivalent secrets (Phase 4 / D-07 / AUTH-04) — NEVER committed.
+# `.env` carries PERFCRAWL_USERNAME / PERFCRAWL_PASSWORD; a captured Playwright
+# `storage_state` (`perfcrawl login --out ...`) is a FULL logged-in session —
+# possessing the file is equivalent to possessing the credentials. Both are
+# per-developer local secrets; committing either would leak the live session.
+.env
+.env.*
+*.authstate.json
+.perfcrawl/
+
 # GSD planning state — per-machine AI-orchestration state, never shared via git
 .planning/
 

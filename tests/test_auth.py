@@ -176,3 +176,61 @@ def test_auth_error_docstring_names_exit_code():
     """The exception docstring must name ExitCode.AUTH_ERROR (CLI-mapping contract)."""
     assert AuthError.__doc__ is not None
     assert "AUTH_ERROR" in AuthError.__doc__
+
+
+# ---------------------------------------------------------------------------
+# Redaction at every sink (D-07 / AUTH-04) — the scrubber removes the live
+# username + password from a representative stderr string, a RunRecord JSON
+# dump, and a saved Lighthouse HTML blob (Pitfall 3).
+# ---------------------------------------------------------------------------
+
+
+def test_redaction_scrubs_all_sinks():
+    """One scrubber seeded from creds redacts stderr, RunRecord JSON, and LH HTML."""
+    from datetime import UTC, datetime
+    from uuid import UUID
+
+    from perfcrawl.models import PageResult, RunRecord
+
+    username, password = "admin", "admin123"
+    scrub = make_scrubber(username, password)
+
+    # 1) A stderr error string that echoes the creds.
+    stderr_msg = f"auth failed: bad login for user={username} pw={password}"
+    scrubbed_stderr = scrub(stderr_msg)
+    assert username not in scrubbed_stderr
+    assert password not in scrubbed_stderr
+    assert REDACTION_PLACEHOLDER in scrubbed_stderr
+
+    # 2) A RunRecord JSON dump whose target URL embeds the credential.
+    run = RunRecord(
+        id=UUID("3f1c2b9a-0000-4000-8000-0000000000d4"),
+        started_at=datetime(2026, 6, 3, tzinfo=UTC),
+        target=f"https://{username}:{password}@example.com/dashboard/",
+        pages=[
+            PageResult(
+                url=f"https://{username}:{password}@example.com/dashboard/",
+                url_key="https://example.com/dashboard/",
+            )
+        ],
+    )
+    scrubbed_json = scrub(run.model_dump_json(indent=2))
+    assert password not in scrubbed_json
+    assert username not in scrubbed_json
+    assert REDACTION_PLACEHOLDER in scrubbed_json
+
+    # 3) A saved Lighthouse HTML blob with the password rendered into a field.
+    lh_html = f'<html><input id="password" value="{password}"></html>'
+    scrubbed_html = scrub(lh_html)
+    assert password not in scrubbed_html
+    assert REDACTION_PLACEHOLDER in scrubbed_html
+
+
+def test_gitignore_covers_secrets():
+    """``.gitignore`` ignores ``.env`` AND a saved auth-state pattern (D-07)."""
+    from pathlib import Path
+
+    gitignore = Path(__file__).resolve().parents[1] / ".gitignore"
+    text = gitignore.read_text()
+    assert ".env" in text, ".gitignore must ignore .env (credential env file)"
+    assert "authstate" in text, ".gitignore must cover the saved storage_state pattern"

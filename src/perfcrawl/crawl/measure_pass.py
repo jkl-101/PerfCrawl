@@ -255,6 +255,7 @@ def measure_pass(
     target: str,
     min_delay_s: float | None = None,
     auth_state: dict | None = None,
+    abort_state: dict | None = None,
 ) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
     """Measure every in-scope URL via a bounded pool of ``measure_url`` calls.
 
@@ -275,6 +276,14 @@ def measure_pass(
     authenticated crawl. Threaded into every worker's ``measure_url`` call so the
     session replays on each independent Chrome (the pool stays concurrent for
     authenticated runs). ``None`` for a public crawl.
+
+    ``abort_state`` (AUTH-03 / D-06 CLI signal): an optional mutable dict the
+    caller passes to learn WHY the pass ended. The ``(run_record, merged)`` return
+    contract is unchanged (existing call sites + tests keep their 2-tuple unpack),
+    so a SessionLost abort is otherwise indistinguishable from a clean partial run.
+    When a mid-crawl session loss aborts the pass, ``abort_state["session_lost"]``
+    is set to ``True`` — the CLI reads it to map the tagged-partial run to
+    ``ExitCode.AUTH_ERROR`` (3). A plain Ctrl-C or a clean full pass leaves it unset.
 
     Provably terminates: the in-scope list is already bounded by discovery's
     caps; the pool drains it once. On ``KeyboardInterrupt`` OR ``SessionLost``
@@ -335,6 +344,12 @@ def measure_pass(
                 "[red]session lost mid-crawl — aborting; "
                 "already-measured pages kept, no logged-out page recorded[/red]"
             )
+            # AUTH-03 CLI signal: flag the out-parameter so the CLI maps this
+            # tagged-partial run to ExitCode.AUTH_ERROR (3), not a clean exit 0.
+            # The Ctrl-C branch deliberately leaves it unset (Ctrl-C is exit 0
+            # partial, not an auth failure).
+            if abort_state is not None:
+                abort_state["session_lost"] = True
     finally:
         # WR-04: cancel still-queued futures and return the partial run promptly
         # (wait=False). NOTE: ThreadPoolExecutor workers are NON-daemon, so any
