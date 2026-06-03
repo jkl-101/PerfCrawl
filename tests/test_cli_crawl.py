@@ -299,3 +299,86 @@ def test_crawl_is_registered() -> None:
     assert result.exit_code == 0
     assert "crawl" in result.stdout
     assert "measure" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# URL truncation for the crawl summary table (260603-fos)
+#
+# A whole-site crawl shares one origin, so the per-row URL collapses to its
+# path (the origin lives in the table header). ``_relativize_url`` strips the
+# shared origin; off-origin / malformed URLs fall back to the full URL.
+# --------------------------------------------------------------------------- #
+
+
+def test_origin_of_extracts_scheme_and_host() -> None:
+    from perfcrawl.cli import _origin_of
+
+    assert _origin_of("https://www.studyhalo.com/courses?p=2") == (
+        "https://www.studyhalo.com"
+    )
+    # No scheme+host → returned unchanged so callers degrade safely.
+    assert _origin_of("not-a-url") == "not-a-url"
+
+
+def test_relativize_strips_shared_origin() -> None:
+    from perfcrawl.cli import _relativize_url
+
+    origin = "https://www.studyhalo.com"
+    assert _relativize_url("https://www.studyhalo.com/courses", origin) == "/courses"
+    # Query and fragment are preserved on the path.
+    assert (
+        _relativize_url("https://www.studyhalo.com/courses?page=2#top", origin)
+        == "/courses?page=2#top"
+    )
+
+
+def test_relativize_root_collapses_to_slash() -> None:
+    from perfcrawl.cli import _relativize_url
+
+    origin = "https://www.studyhalo.com"
+    assert _relativize_url("https://www.studyhalo.com/", origin) == "/"
+    # Origin with no path component still renders the root as "/".
+    assert _relativize_url("https://www.studyhalo.com", origin) == "/"
+
+
+def test_relativize_falls_back_for_off_origin_and_lookalike_hosts() -> None:
+    from perfcrawl.cli import _relativize_url
+
+    origin = "https://www.studyhalo.com"
+    # Genuinely different origin → full URL.
+    assert (
+        _relativize_url("https://cdn.other.com/asset.js", origin)
+        == "https://cdn.other.com/asset.js"
+    )
+    # Prefix-lookalike host must NOT be treated as on-origin (host compared
+    # structurally, not by string prefix).
+    assert (
+        _relativize_url("https://www.studyhalo.com.evil.com/x", origin)
+        == "https://www.studyhalo.com.evil.com/x"
+    )
+    # Unparseable / scheme-relative input falls back to the raw value.
+    assert _relativize_url("javascript:void(0)", origin) == "javascript:void(0)"
+
+
+def test_crawl_summary_table_shows_relative_paths(
+    monkeypatch, tmp_path: Path, local_server: str
+) -> None:
+    """End-to-end: rows render the page path, not the full URL."""
+    _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    origin = local_server.rstrip("/")
+    # The seed page renders as its relative path...
+    assert "/index.html" in result.stdout
+    # ...and the full per-row URL (origin + path) is truncated away.
+    assert f"{origin}/index.html" not in result.stdout
