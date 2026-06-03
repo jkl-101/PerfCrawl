@@ -110,9 +110,7 @@ def test_measure_pass_merges_three_pages(monkeypatch) -> None:
     ]
     _patch_measure(monkeypatch)
     cfg = CrawlConfig()
-    run, merged = measure_pass(
-        _in_scope(*urls), [], cfg=cfg, target="https://example.com/"
-    )
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
     assert len(run.pages) == 3
     assert len(merged) == 3
     keys = {canonical_key(u) for u in urls}
@@ -142,9 +140,7 @@ def test_measure_pass_pool_size_is_concurrency(monkeypatch) -> None:
     monkeypatch.setattr(ThreadPoolExecutor, "__init__", spy_init)
     _patch_measure(monkeypatch)
     cfg = CrawlConfig(concurrency=5)
-    measure_pass(
-        _in_scope("https://example.com/x"), [], cfg=cfg, target="https://example.com/"
-    )
+    measure_pass(_in_scope("https://example.com/x"), [], cfg=cfg, target="https://example.com/")
     assert captured["max_workers"] == 5
 
 
@@ -159,9 +155,7 @@ def test_measurement_error_tags_one_page(monkeypatch) -> None:
 
     bad = "https://example.com/broken"
     urls = ["https://example.com/ok1", bad, "https://example.com/ok2"]
-    _patch_measure(
-        monkeypatch, side_effects={bad: MeasurementError("all samples failed")}
-    )
+    _patch_measure(monkeypatch, side_effects={bad: MeasurementError("all samples failed")})
     run, merged = measure_pass(
         _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
     )
@@ -188,9 +182,7 @@ def test_unexpected_exception_tags_one_page(monkeypatch) -> None:
     """
     bad = "https://example.com/explode"
     urls = ["https://example.com/ok1", bad, "https://example.com/ok2"]
-    _patch_measure(
-        monkeypatch, side_effects={bad: RuntimeError("chrome went sideways")}
-    )
+    _patch_measure(monkeypatch, side_effects={bad: RuntimeError("chrome went sideways")})
     run, merged = measure_pass(
         _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
     )
@@ -258,17 +250,13 @@ def test_aggregate_round_trips_through_store(monkeypatch, tmp_path: Path) -> Non
         "https://example.com/z",
     ]
     _patch_measure(monkeypatch)
-    run, _ = measure_pass(
-        _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
-    )
+    run, _ = measure_pass(_in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/")
     db = tmp_path / "perfcrawl.db"
     conn = sqlite3.connect(db)
     try:
         init_db(conn)
         write_run(conn, run)  # must NOT raise ValueError(duplicate url_key)
-        rows = conn.execute(
-            "SELECT id FROM runs WHERE id = ?", (str(run.id),)
-        ).fetchall()
+        rows = conn.execute("SELECT id FROM runs WHERE id = ?", (str(run.id),)).fetchall()
         assert len(rows) == 1
     finally:
         conn.close()
@@ -287,9 +275,7 @@ def test_keyboard_interrupt_partial_flush(monkeypatch) -> None:
     # concurrency=1 makes ordering deterministic: /done completes, then /interrupt
     # raises KeyboardInterrupt, and /never is not reached.
     cfg = CrawlConfig(concurrency=1)
-    run, merged = measure_pass(
-        _in_scope(*urls), [], cfg=cfg, target="https://example.com/"
-    )
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
     # The partial run is returned (reaching this assert is the proof it flushed).
     keys = {p.url_key for p in run.pages}
     assert canonical_key("https://example.com/done") in keys
@@ -341,9 +327,7 @@ def test_session_loss_partial_flush_abort(monkeypatch) -> None:
     # concurrency=1 makes ordering deterministic: /dash1 measures, then /dash2
     # lands on /login/ → SessionLost → abort before /dash3.
     cfg = CrawlConfig(concurrency=1, login_url="https://example.com/login/")
-    run, merged = measure_pass(
-        _in_scope(*urls), [], cfg=cfg, target="https://example.com/"
-    )
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
     keys = {p.url_key for p in run.pages}
     # The healthy 1st page is flushed (the work is kept).
     assert canonical_key(first) in keys
@@ -368,9 +352,14 @@ def test_auth_state_threaded_into_pool(monkeypatch) -> None:
         target="https://example.com/",
         auth_state=auth_state,
     )
-    # Every measure_url call received the same auth_state object.
-    assert record  # at least one call happened
-    assert all(auth is auth_state for (_url, auth) in record)
+    # Every measure_url call for THIS pass's URLs received the same auth_state
+    # object. (Filter to this test's own URLs: a prior test's pool may leave a
+    # non-daemon worker draining a cancelled future that records under the
+    # re-patched seam — that lingering call carries this test's URLs' siblings,
+    # never one of `urls`, so the filter keeps the assertion deterministic.)
+    seen = [(u, auth) for (u, auth) in record if u in urls]
+    assert seen  # at least one call for this pass happened
+    assert all(auth is auth_state for (_url, auth) in seen)
 
 
 def test_denied_url_not_measured(monkeypatch) -> None:

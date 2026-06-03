@@ -75,7 +75,11 @@ def _patch_measure(monkeypatch, *, side_effect=None) -> list:
     """
     calls: list[str] = []
 
-    def fake(*, url, samples=1, emulation="mobile"):
+    def fake(*, url, samples=1, emulation="mobile", auth_state=None):
+        # auth_state: Plan 04-01 extended the measure_url seam with the replayed
+        # session kwarg, and Plan 04-03 threads it through the pool — the fake must
+        # accept it (defaulting None for these public-crawl CLI tests) or every
+        # call TypeErrors into a tagged error row and the crawl reports 0 measured.
         calls.append(url)
         if side_effect is not None:
             raise side_effect
@@ -199,9 +203,7 @@ def test_multipage_output(monkeypatch, tmp_path: Path, local_server: str) -> Non
         conn.close()
 
 
-def test_json_flag_emits_multipage_json(
-    monkeypatch, tmp_path: Path, local_server: str
-) -> None:
+def test_json_flag_emits_multipage_json(monkeypatch, tmp_path: Path, local_server: str) -> None:
     """``--json`` prints the full multi-page RunRecord JSON to stdout (D-06)."""
     _patch_measure(monkeypatch)
     result = runner.invoke(
@@ -227,9 +229,7 @@ def test_json_flag_emits_multipage_json(
 # --------------------------------------------------------------------------- #
 
 
-def test_ignore_robots_warns_on_stderr(
-    monkeypatch, tmp_path: Path, local_server: str
-) -> None:
+def test_ignore_robots_warns_on_stderr(monkeypatch, tmp_path: Path, local_server: str) -> None:
     """``--ignore-robots`` emits a loud warning to stderr, not stdout (D-11/D-06)."""
     _patch_measure(monkeypatch)
     result = runner.invoke(
@@ -255,9 +255,7 @@ def test_ignore_robots_warns_on_stderr(
 # --------------------------------------------------------------------------- #
 
 
-def test_exit_two_when_all_pages_fail(
-    monkeypatch, tmp_path: Path, local_server: str
-) -> None:
+def test_exit_two_when_all_pages_fail(monkeypatch, tmp_path: Path, local_server: str) -> None:
     """Every page failing to measure → MEASUREMENT_ERROR (2) with a stderr note."""
     from perfcrawl.orchestrator import MeasurementError
 
@@ -273,17 +271,13 @@ def test_exit_two_when_all_pages_fail(
             str(tmp_path),
         ],
     )
-    assert result.exit_code == ExitCode.MEASUREMENT_ERROR, (
-        result.stdout + result.stderr
-    )
+    assert result.exit_code == ExitCode.MEASUREMENT_ERROR, result.stdout + result.stderr
 
 
 def test_exit_one_on_empty_url(monkeypatch, tmp_path: Path) -> None:
     """An empty seed URL is a user error (1) before any measurement."""
     calls = _patch_measure(monkeypatch)
-    result = runner.invoke(
-        app, ["crawl", "", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["crawl", "", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.USER_ERROR
     assert calls == []
 
@@ -313,9 +307,7 @@ def test_crawl_is_registered() -> None:
 def test_origin_of_extracts_scheme_and_host() -> None:
     from perfcrawl.cli import _origin_of
 
-    assert _origin_of("https://www.studyhalo.com/courses?p=2") == (
-        "https://www.studyhalo.com"
-    )
+    assert _origin_of("https://www.studyhalo.com/courses?p=2") == ("https://www.studyhalo.com")
     # No scheme+host → returned unchanged so callers degrade safely.
     assert _origin_of("not-a-url") == "not-a-url"
 
