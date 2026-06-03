@@ -27,7 +27,6 @@ from perfcrawl.auth import (
 )
 from perfcrawl.constants import REDACTION_PLACEHOLDER
 
-
 # ---------------------------------------------------------------------------
 # make_scrubber (D-07 credential redaction)
 # ---------------------------------------------------------------------------
@@ -133,9 +132,7 @@ def test_login_confirmed_success_text_marker_in_content_is_true():
     """success_text rule: marker present in page content ⇒ True even if URL matches."""
     page = _fake_page("https://site/login/", content="<div>AUTHENTICATED_OK</div>")
     assert (
-        _login_confirmed(
-            page, "https://site/login/", success_rule={"text": "AUTHENTICATED_OK"}
-        )
+        _login_confirmed(page, "https://site/login/", success_rule={"text": "AUTHENTICATED_OK"})
         is True
     )
 
@@ -144,9 +141,7 @@ def test_login_confirmed_success_text_marker_absent_is_false():
     """success_text rule: marker absent ⇒ False."""
     page = _fake_page("https://site/dashboard/", content="<div>nope</div>")
     assert (
-        _login_confirmed(
-            page, "https://site/login/", success_rule={"text": "AUTHENTICATED_OK"}
-        )
+        _login_confirmed(page, "https://site/login/", success_rule={"text": "AUTHENTICATED_OK"})
         is False
     )
 
@@ -154,12 +149,7 @@ def test_login_confirmed_success_text_marker_absent_is_false():
 def test_login_confirmed_success_url_rule_matches():
     """success_url rule: landed URL contains the expected fragment ⇒ True."""
     page = _fake_page("https://site/app/home/")
-    assert (
-        _login_confirmed(
-            page, "https://site/login/", success_rule={"url": "/app/home/"}
-        )
-        is True
-    )
+    assert _login_confirmed(page, "https://site/login/", success_rule={"url": "/app/home/"}) is True
 
 
 def test_login_confirmed_never_raises_on_garbage():
