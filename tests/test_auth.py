@@ -22,6 +22,7 @@ import pytest
 from perfcrawl.auth import (
     AuthError,
     _login_confirmed,
+    do_form_login,
     make_scrubber,
     validate_storage_state,
 )
@@ -224,6 +225,106 @@ def test_redaction_scrubs_all_sinks():
     scrubbed_html = scrub(lh_html)
     assert password not in scrubbed_html
     assert REDACTION_PLACEHOLDER in scrubbed_html
+
+
+# ---------------------------------------------------------------------------
+# do_form_login Playwright-interaction failure → credential-free AuthError
+# (CR-01 / AUTH-04). A misconfigured selector raises a raw Playwright exception
+# inside the goto/fill/click/wait block; that MUST surface as AuthError with no
+# chain and no credential literal — not a raw traceback carrying password=...
+# ---------------------------------------------------------------------------
+
+
+class _FailingPage:
+    """A fake Playwright page whose ``.fill`` raises (wrong-selector failure mode)."""
+
+    def __init__(self):
+        self.url = ""
+
+    def goto(self, *_a, **_k):
+        return None
+
+    def fill(self, *_a, **_k):
+        # Simulate a Playwright TimeoutError for a selector that never matched.
+        # The message intentionally carries no credential — the point is the raw
+        # exception TYPE is not AuthError and must be converted.
+        raise RuntimeError("Timeout 5000ms exceeded waiting for selector")
+
+    def click(self, *_a, **_k):  # pragma: no cover - never reached after fill raises
+        return None
+
+    def wait_for_load_state(self, *_a, **_k):  # pragma: no cover
+        return None
+
+
+class _FakeContext:
+    def __init__(self, page):
+        self._page = page
+
+    def new_page(self):
+        return self._page
+
+    def storage_state(self):  # pragma: no cover - never reached on the failure path
+        return {"cookies": [{"name": "sid", "value": "x"}], "origins": []}
+
+
+class _FakeBrowser:
+    def __init__(self, page):
+        self.contexts = [_FakeContext(page)]
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeSyncPlaywright:
+    """Context-manager replacement for ``sync_playwright()`` returning a fake p."""
+
+    def __init__(self, page):
+        self._page = page
+
+    def __enter__(self):
+        page = self._page
+
+        class _Chromium:
+            def connect_over_cdp(self_inner, _endpoint):
+                return _FakeBrowser(page)
+
+        return SimpleNamespace(chromium=_Chromium())
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def test_do_form_login_playwright_failure_raises_credential_free_autherror(monkeypatch):
+    """A failure inside the interaction block → AuthError, no chain, no creds (CR-01)."""
+    sentinel_user = "SENTINEL_USER"
+    sentinel_pass = "SENTINEL_PASS"
+
+    failing_page = _FailingPage()
+    monkeypatch.setattr(
+        "perfcrawl.auth.sync_playwright",
+        lambda: _FakeSyncPlaywright(failing_page),
+    )
+
+    with pytest.raises(AuthError) as exc:
+        do_form_login(
+            port=9222,
+            login_url="https://site/login/",
+            user_sel="#user",
+            pass_sel="#pass",
+            submit_sel="#submit",
+            username=sentinel_user,
+            password=sentinel_pass,
+        )
+
+    # The raw Playwright exception chain is suppressed (`from None`) so no
+    # traceback with live-password frame locals is surfaced.
+    assert exc.value.__cause__ is None
+    # The friendly message echoes NO credential and NO selector value.
+    msg = str(exc.value)
+    assert sentinel_user not in msg
+    assert sentinel_pass not in msg
 
 
 def test_gitignore_covers_secrets():
