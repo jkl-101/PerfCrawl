@@ -165,6 +165,7 @@ def measure_url(
     url: str,
     samples: int = 1,
     emulation: str = "mobile",
+    auth_state: dict | None = None,
 ) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
     """Measure one URL end-to-end (D-05): Chrome → CDP → per-sample LH → aggregate.
 
@@ -173,6 +174,25 @@ def measure_url(
     ``{url_key: (reportJson, reportHtml)}`` populated from the FIRST successful
     sample's worker envelope. The CLI (02-04) destructures and forwards
     ``raw_artifacts`` to ``output.write_outputs`` for OUT-03 (raw LH artifacts on disk).
+
+    Authenticated audits (Phase 4, AUTH-01 — D-02/D-03):
+
+      When ``auth_state`` is supplied (a Playwright ``storage_state`` dict from
+      ``auth.do_form_login`` / ``auth.resolve_auth_state``), the captured session
+      is replayed onto ``browser.contexts[0]`` — the DEFAULT context the
+      Lighthouse CDP target navigates in — and the per-sample loop runs DIRECTLY
+      on that default context. It does NOT call ``browser.new_context()``: an
+      isolated context is invisible to the Lighthouse target, so logging in there
+      silently captures a logged-out page (Pitfall 1). Cold-cache fidelity (D-03)
+      is preserved by Lighthouse 13's own per-navigation cache disabling + its
+      default ``clearStorageTypes`` (``cache_storage`` / ``service_workers``),
+      which never clears cookies (Pitfall 2). The public path (``auth_state is
+      None``) keeps the existing ``new_context()`` cold-cache cycle UNCHANGED.
+
+      The first successful sample's ``finalDisplayedUrl`` is surfaced on the
+      returned ``RunRecord.final_displayed_url`` so the downstream session-loss
+      check (Plan 03) can detect a /login/ landing — NOT by extending the return
+      tuple (the contract is the RunRecord field).
 
     Failure paths:
 
@@ -191,9 +211,7 @@ def measure_url(
     if samples < 1:
         raise UserError(f"--samples must be >= 1; got {samples}")
     if emulation not in {"mobile", "desktop"}:
-        raise UserError(
-            f"--emulation must be 'mobile' or 'desktop'; got {emulation!r}"
-        )
+        raise UserError(f"--emulation must be 'mobile' or 'desktop'; got {emulation!r}")
 
     # --- Worker preflight (fails fast before Chrome is launched) ---
     preflight()
@@ -204,15 +222,45 @@ def measure_url(
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
 
+            # --- Phase 4 (D-02/D-03): replay the captured session onto the
+            # DEFAULT context BEFORE auditing. The session MUST live on
+            # `browser.contexts[0]` because that is the context the Lighthouse
+            # CDP target navigates in; a session on any isolated `new_context()`
+            # is invisible to it (Pitfall 1, spike 003 Arm B). For a cookie-only
+            # Django session only `add_cookies` runs; the `origins` localStorage
+            # replay is a no-op unless the captured state carried token-in-
+            # localStorage origins (A5 / Open-Q1).
+            if auth_state is not None:
+                default_ctx = browser.contexts[0]
+                if auth_state.get("cookies"):
+                    default_ctx.add_cookies(auth_state["cookies"])
+                for origin in auth_state.get("origins", []):
+                    pg = default_ctx.new_page()
+                    pg.goto(origin["origin"], wait_until="commit")
+                    for item in origin.get("localStorage", []):
+                        pg.evaluate(
+                            "([k, v]) => localStorage.setItem(k, v)",
+                            [item["name"], item["value"]],
+                        )
+                    pg.close()
+
             per_sample_results: list[PageResult] = []
             lhr_for_metadata: dict | None = None
             first_raw_report: tuple[str, str] | None = None
+            final_displayed_url: str | None = None
 
             for _sample_idx in range(samples):
-                # D-03 cold cache: a fresh BrowserContext per sample. The Chrome
-                # process stays alive across samples; isolation comes from
-                # cycling the context, not from killing the browser.
-                context = browser.new_context()
+                # D-02/D-03 reconciliation: the authenticated path MUST run on
+                # the DEFAULT context (where the replayed session lives) — calling
+                # `browser.new_context()` here would isolate the audit from the
+                # session and silently capture a logged-out page (Pitfall 1). The
+                # public path keeps the fresh-context-per-sample cold-cache cycle;
+                # for the auth path, cold-cache fidelity comes from Lighthouse 13's
+                # own per-navigation cache disabling + default `clearStorageTypes`
+                # (`cache_storage`/`service_workers`), NOT from a fresh context
+                # (Pitfall 2). The Chrome process stays alive across samples either
+                # way; isolation never comes from killing the browser.
+                context = None if auth_state is not None else browser.new_context()
                 try:
                     # D-14: initial attempt, then one retry on failure.
                     lh = run_one_sample(
@@ -234,6 +282,11 @@ def measure_url(
                         per_sample_results.append(page_result)
                         if lhr_for_metadata is None:
                             lhr_for_metadata = lhr
+                        if final_displayed_url is None:
+                            # AUTH-03 signal: the first successful sample's landing
+                            # URL. A /login/ value means the session was lost; the
+                            # downstream check (Plan 03) reads this off the RunRecord.
+                            final_displayed_url = lhr.get("finalDisplayedUrl")
                         if first_raw_report is None and (
                             lh.get("reportJson") or lh.get("reportHtml")
                         ):
@@ -259,7 +312,12 @@ def measure_url(
                                 lh.get("reportHtml") or "",
                             )
                 finally:
-                    context.close()
+                    # Public path cycles a fresh context per sample (close it);
+                    # the auth path runs on the persistent default context, which
+                    # must NOT be closed between samples (closing it would drop
+                    # the replayed session for subsequent samples — D-02/D-03).
+                    if context is not None:
+                        context.close()
 
             if not per_sample_results:
                 # D-14 + T-02-03-PARTIAL: never produce a silently-empty PageResult.
@@ -290,17 +348,20 @@ def measure_url(
                 id=uuid4(),
                 started_at=datetime.now(UTC),
                 target=url,
+                auth_used=auth_state is not None,
                 chrome_version=chrome_version,
                 lighthouse_version=lighthouse_version,
                 throttling=throttling,
                 emulation=emulation,
+                # AUTH-03: surface the first sample's finalDisplayedUrl so the
+                # downstream session-loss check reads it off the RunRecord
+                # (NOT via the return tuple — D-02/D-06).
+                final_displayed_url=final_displayed_url,
                 pages=[aggregated],
             )
 
             raw_artifacts: dict[str, tuple[str, str]] = (
-                {aggregated.url_key: first_raw_report}
-                if first_raw_report is not None
-                else {}
+                {aggregated.url_key: first_raw_report} if first_raw_report is not None else {}
             )
             return run_record, raw_artifacts
     finally:
