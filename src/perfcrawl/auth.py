@@ -158,11 +158,29 @@ def do_form_login(
         # `connect_over_cdp` always exposes the default context at index 0.
         ctx = browser.contexts[0]
         page = ctx.new_page()
-        page.goto(login_url, wait_until="load")
-        page.fill(user_sel, username)
-        page.fill(pass_sel, password)
-        page.click(submit_sel)
-        page.wait_for_load_state("load", timeout=LOGIN_WAIT_TIMEOUT_MS)
+        # CR-01 (AUTH-04): every Playwright failure in this interaction block (a
+        # wrong --user-sel/--pass-sel is the routine failure mode) MUST surface
+        # as a credential-free AuthError, NOT a raw Playwright exception. A raw
+        # exception sails past the CLI's `except AuthError` arm and Typer prints
+        # a traceback whose frame locals carry `password=<live value>` — the
+        # scrubber is never applied. `from None` suppresses that chain so the
+        # live secret in those frames is never surfaced. The message names the
+        # likely cause WITHOUT echoing any credential or selector value. The
+        # `with sync_playwright()` context manager tears down the Playwright
+        # connection on exception; this does NOT kill the Popen'd Chrome (the
+        # caller owns Chrome's lifecycle — `browser.close()` is a disconnect
+        # only, per the spike findings), so no Chrome kill is added here.
+        try:
+            page.goto(login_url, wait_until="load")
+            page.fill(user_sel, username)
+            page.fill(pass_sel, password)
+            page.click(submit_sel)
+            page.wait_for_load_state("load", timeout=LOGIN_WAIT_TIMEOUT_MS)
+        except Exception:
+            raise AuthError(
+                "could not complete the login form — check --login-url and the "
+                "--user-sel/--pass-sel/--submit-sel selectors"
+            ) from None
         if not _login_confirmed(page, login_url, success_rule):
             browser.close()
             raise AuthError(
