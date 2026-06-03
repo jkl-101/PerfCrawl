@@ -44,7 +44,7 @@ from urllib.parse import urldefrag, urljoin, urlsplit
 from perfcrawl.canonical import canonical_key
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.robots import RobotsGate
-from perfcrawl.crawl.scope import VariantCounter, in_scope, passes_filters
+from perfcrawl.crawl.scope import VariantCounter, in_scope, is_denied, passes_filters
 from perfcrawl.crawl.sitemap import collect_sitemap_urls
 from perfcrawl.models import PageResult
 
@@ -101,9 +101,7 @@ def _extract_links(html: str) -> list[str]:
         return []
 
 
-def _sitemap_seeds(
-    seed: str, *, robots: RobotsGate, fetch: Callable[[str], object]
-) -> set[str]:
+def _sitemap_seeds(seed: str, *, robots: RobotsGate, fetch: Callable[[str], object]) -> set[str]:
     """Collect depth-0 sitemap seeds: ``/sitemap.xml`` + robots ``Sitemap:`` dirs.
 
     Soft no-op on anything that does not parse (D-07) — ``collect_sitemap_urls``
@@ -164,6 +162,20 @@ def discover(
         if not in_scope(url, seed, include_subdomains=cfg.include_subdomains):
             return
         if not passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
+            return
+        # D-05 / T-04-04: always-on destructive-link denylist. Placed EARLY (before
+        # robots and the variant cap) so a denied URL never consumes a per-base-path
+        # cap slot — the SAME WR-06 robots-before-cap rationale documented above:
+        # admitting a destructive link to the frontier+cap would crowd out crawlable
+        # siblings, and a /logout/ must be structurally unreachable, not merely
+        # deprioritized. is_denied is fail-CLOSED (garbage -> denied).
+        if is_denied(url, patterns=cfg.deny_patterns):
+            return
+        # AUTH-04 / D-07 / T-04-05: exclude the configured login URL from the audited
+        # set — the login form may echo submitted credentials into a captured
+        # artifact. Done once here, in the single admission path (IN-05), so the
+        # exclusion cannot drift across call sites.
+        if cfg.login_url and canonical_key(url) == canonical_key(cfg.login_url):
             return
         if not robots.can_fetch(url):
             return
