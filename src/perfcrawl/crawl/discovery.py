@@ -140,6 +140,13 @@ def discover(
     errors: list[PageResult] = []
     variants = VariantCounter(cfg.query_variant_cap)
     delay = robots.effective_delay
+    # WR-04: the login-URL exclusion key is loop-invariant — derive it ONCE here
+    # rather than recomputing canonical_key(cfg.login_url) for every candidate.
+    # Reusing the carried `key` for the candidate side (below) honors the same
+    # WR-06 "compute once / never re-derive" discipline the frontier already uses,
+    # closing the "key diverges from a later re-derived key if canonicalization is
+    # ever non-idempotent" hazard the surrounding comments warn against.
+    login_key = canonical_key(cfg.login_url) if cfg.login_url else None
 
     def _try_admit(url: str, depth: int) -> None:
         """Gate + enqueue a candidate once (IN-05: ONE admission path for all).
@@ -174,8 +181,9 @@ def discover(
         # AUTH-04 / D-07 / T-04-05: exclude the configured login URL from the audited
         # set — the login form may echo submitted credentials into a captured
         # artifact. Done once here, in the single admission path (IN-05), so the
-        # exclusion cannot drift across call sites.
-        if cfg.login_url and canonical_key(url) == canonical_key(cfg.login_url):
+        # exclusion cannot drift across call sites. WR-04: reuse the already-computed
+        # `key` and the loop-invariant `login_key` rather than re-deriving either.
+        if login_key is not None and key == login_key:
             return
         if not robots.can_fetch(url):
             return
