@@ -116,10 +116,24 @@ def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.P
         # login` so the user can complete an interactive SSO/MFA login by hand.
         if headless:
             argv.insert(3, "--headless=new")
+        # WR-04-06 (UAT test-6 root cause): launch Chrome as its OWN session and
+        # process-group leader. The `perfcrawl login` teardown's
+        # `os.killpg(os.getpgid(chrome.pid), 15)` (cli.py ~804) reaps any orphaned
+        # headed Chrome + its renderer children under a `uv run` re-exec. Without
+        # `start_new_session=True` Chrome shares perfcrawl's process group, so that
+        # killpg SIGTERMs perfcrawl ITSELF — after `ctx.storage_state()` captured
+        # the session but BEFORE `validate_storage_state()` + the owner-only file
+        # write (cli.py:811-833) — and the command exits silently with no --out
+        # file. Making Chrome its own group leader confines the killpg to Chrome's
+        # group only. The two other callers tear down via `chrome.kill()` (a direct
+        # PID signal), which is unaffected by the new process group: the headless
+        # audit launch (measure_url) and the crawl driven-login launch (cli.py:131)
+        # both remain correct.
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
     except Exception:
         # Cleanup-on-raise: same disk-leak class as CR-03, same rmtree pattern.
