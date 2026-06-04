@@ -23,14 +23,14 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
 
 from perfcrawl.auth import validate_storage_state
 from perfcrawl.cli import app
-from perfcrawl.constants import ExitCode, INP_PROXY_DISPLAY_LABEL
+from perfcrawl.constants import INP_PROXY_DISPLAY_LABEL, ExitCode
 from perfcrawl.models import MetricSample, PageResult, RunRecord
 from perfcrawl.orchestrator import MeasurementError, UserError
 
@@ -131,17 +131,13 @@ def test_exit_zero_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     run = _make_stub_run()
     artifacts = _make_stub_artifacts(run)
     _patch_measure(monkeypatch, return_value=(run, artifacts))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
 
 
 def test_exit_one_on_user_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_measure(monkeypatch, side_effect=UserError("URL is empty"))
-    result = runner.invoke(
-        app, ["measure", "", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.USER_ERROR
     # Error message surfaces on stderr per D-06.
     assert "URL is empty" in result.stderr or "URL is empty" in result.stdout
@@ -149,14 +145,9 @@ def test_exit_one_on_user_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 def test_exit_two_on_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_measure(monkeypatch, side_effect=MeasurementError("all 3 samples failed"))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.MEASUREMENT_ERROR
-    assert (
-        "samples failed" in result.stderr
-        or "samples failed" in result.stdout
-    )
+    assert "samples failed" in result.stderr or "samples failed" in result.stdout
 
 
 def test_exit_one_when_output_dir_unwriteable(
@@ -209,9 +200,7 @@ def test_no_json_flag_emits_rich_table_on_stdout(
     """Default mode prints a human-readable Rich table with the labeled INP row."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
     # Not valid JSON.
     with pytest.raises(json.JSONDecodeError):
@@ -220,15 +209,11 @@ def test_no_json_flag_emits_rich_table_on_stdout(
     assert INP_PROXY_DISPLAY_LABEL in result.stdout
 
 
-def test_inp_label_visible_in_rich_table(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_inp_label_visible_in_rich_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The Rich row label reads the constants string verbatim (defense in depth)."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
     assert INP_PROXY_DISPLAY_LABEL in result.stdout
     # The TBT median (42) appears alongside the label.
@@ -240,23 +225,17 @@ def test_inp_label_visible_in_rich_table(
 # --------------------------------------------------------------------------- #
 
 
-def test_persistence_writes_to_sqlite(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_persistence_writes_to_sqlite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
 
     db_path = tmp_path / "perfcrawl.db"
     assert db_path.exists(), f"SQLite db missing at {db_path}"
     conn = sqlite3.connect(db_path)
     try:
-        rows = conn.execute(
-            "SELECT id FROM runs WHERE id = ?", (str(run.id),)
-        ).fetchall()
+        rows = conn.execute("SELECT id FROM runs WHERE id = ?", (str(run.id),)).fetchall()
         assert len(rows) == 1
     finally:
         conn.close()
@@ -271,9 +250,7 @@ def test_on_disk_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     """``<output_dir>/<run_id>/{result.json,result.csv,lighthouse/*.json,*.html}`` all exist."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
 
     run_dir = tmp_path / str(run.id)
@@ -336,9 +313,7 @@ def test_render_human_table_handles_empty_pages(
         pages=[],  # IN-02: this is the regression vector.
     )
     _patch_measure(monkeypatch, return_value=(empty_run, {}))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     # Should not raise IndexError — exit cleanly (success, with a notice).
     assert result.exit_code == ExitCode.SUCCESS, (
         f"empty-pages RunRecord crashed the CLI: "
@@ -500,7 +475,9 @@ def test_login_escape_hatch_writes_session_and_parent_survives_killpg(
     monkeypatch.setattr("playwright.sync_api.sync_playwright", _fake_sync_playwright)
     monkeypatch.setattr("perfcrawl.cli._launch_chrome_with_cdp_port", fake_launch)
 
-    result = runner.invoke(app, ["login", "https://example.com/login/", "--out", str(out)], input="\n")
+    result = runner.invoke(
+        app, ["login", "https://example.com/login/", "--out", str(out)], input="\n"
+    )
 
     # 1. The command completed and the result is reachable — the test process
     #    (perfcrawl stand-in) was NOT killed by the teardown killpg. If the
