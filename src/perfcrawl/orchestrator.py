@@ -254,19 +254,36 @@ def measure_url(
                         continue
                     origin_url = origin.get("origin")
                     pg = default_ctx.new_page()
-                    pg.goto(origin_url, wait_until="commit")
-                    for item in origin.get("localStorage", []):
-                        if (
-                            not isinstance(item, dict)
-                            or "name" not in item
-                            or "value" not in item
-                        ):
-                            continue
-                        pg.evaluate(
-                            "([k, v]) => localStorage.setItem(k, v)",
-                            [item["name"], item["value"]],
-                        )
-                    pg.close()
+                    # WR-03 (AUTH-04 reliability): CR-02 guarded entry SHAPE, but a
+                    # well-formed-but-hostile VALUE — `"origin": "ftp://x"`,
+                    # `"origin": "not a url"`, or an origin that hangs `goto` — is a
+                    # non-empty string that passes the shape guard, then `pg.goto`
+                    # raises and the exception escapes measure_url. Wrap the per-
+                    # origin replay so a bad URL value is skip-tolerated like a bad
+                    # shape (honoring the module's "Never crashes on garbage"
+                    # promise) instead of silently turning EVERY authenticated page
+                    # into an error row. `pg` is closed in a finally so the replay
+                    # page is never leaked on the raising path.
+                    try:
+                        pg.goto(origin_url, wait_until="commit")
+                        for item in origin.get("localStorage", []):
+                            if (
+                                not isinstance(item, dict)
+                                or "name" not in item
+                                or "value" not in item
+                            ):
+                                continue
+                            pg.evaluate(
+                                "([k, v]) => localStorage.setItem(k, v)",
+                                [item["name"], item["value"]],
+                            )
+                    except Exception:
+                        continue
+                    finally:
+                        try:
+                            pg.close()
+                        except Exception:
+                            pass
 
             per_sample_results: list[PageResult] = []
             lhr_for_metadata: dict | None = None

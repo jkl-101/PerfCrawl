@@ -801,3 +801,88 @@ def test_measure_url_skips_malformed_origins_entries(monkeypatch):
     assert browser.replay.get("goto") == ["https://example.com"]
     # Only the one well-formed localStorage item was replayed.
     assert browser.replay.get("evaluate") == [["good", "1"]]
+
+
+class _BadUrlPage:
+    """A default-context page whose `goto` RAISES on a designated bad-URL value
+    (modeling Playwright's behavior on `ftp://x` / `not a url` / an unreachable
+    host), recording goto attempts, successful evaluates, and close() calls."""
+
+    def __init__(self, recorder: dict, bad_url: str) -> None:
+        self._rec = recorder
+        self._bad_url = bad_url
+
+    def goto(self, origin, **_kw):
+        self._rec.setdefault("goto", []).append(origin)
+        if origin == self._bad_url:
+            raise RuntimeError("net::ERR_ABORTED — unsupported scheme")
+
+    def evaluate(self, _script, args):
+        self._rec.setdefault("evaluate", []).append(args)
+
+    def close(self):
+        self._rec["closes"] = self._rec.get("closes", 0) + 1
+
+
+class _BadUrlBrowser:
+    """Fake Browser whose DEFAULT context hands out `_BadUrlPage`s so a
+    well-formed-but-hostile origin VALUE makes goto raise (WR-03)."""
+
+    def __init__(self, bad_url: str) -> None:
+        self.replay = {}
+        self._bad_url = bad_url
+        default_ctx = SimpleNamespace(
+            add_cookies=lambda cookies: self.replay.setdefault("cookies", cookies),
+            new_page=lambda: _BadUrlPage(self.replay, self._bad_url),
+        )
+        self.contexts: list = [default_ctx]
+
+    def new_context(self):
+        c = _FakeContext()
+        self.contexts.append(c)
+        return c
+
+
+def test_measure_url_skips_bad_url_value_origins_entries(monkeypatch):
+    """WR-03: an entry that passes the CR-02 SHAPE guard but carries a hostile
+    URL VALUE (a string that makes `pg.goto` raise) must be skip-tolerated like
+    a bad shape — no exception escapes measure_url, a well-formed origin after
+    it is still replayed, and the replay page is closed on the raising path (no
+    leak)."""
+    from perfcrawl.orchestrator import measure_url
+    import perfcrawl.orchestrator as orch
+
+    bad_url = "ftp://nope"
+    browser = _BadUrlBrowser(bad_url)
+    _install_orchestrator_stubs(monkeypatch, browser=browser)
+    monkeypatch.setattr(orch, "run_one_sample", lambda **kw: _stub_worker_envelope())
+
+    auth_state = {
+        "cookies": [{"name": "sid", "value": "abc"}],
+        "origins": [
+            {  # shape-valid but VALUE makes goto raise
+                "origin": bad_url,
+                "localStorage": [{"name": "should-not", "value": "replay"}],
+            },
+            {  # well-formed origin that must STILL be replayed after the bad one
+                "origin": "https://example.com",
+                "localStorage": [{"name": "good", "value": "1"}],
+            },
+        ],
+    }
+
+    # Before the fix, the bad goto raises out of measure_url; after, it completes.
+    run_record, _ = measure_url(
+        url="https://example.com/",
+        samples=1,
+        emulation="mobile",
+        auth_state=auth_state,
+    )
+
+    # Both origins were attempted (goto called for each)...
+    assert browser.replay.get("goto") == [bad_url, "https://example.com"]
+    # ...but only the GOOD origin's localStorage item replayed (the bad one
+    # aborted before its setItem).
+    assert browser.replay.get("evaluate") == [["good", "1"]]
+    # Both replay pages were closed — the bad-URL page is NOT leaked.
+    assert browser.replay.get("closes") == 2
