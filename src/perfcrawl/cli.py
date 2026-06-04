@@ -798,8 +798,23 @@ def login(
         err_console.print(f"[red]auth failed:[/red] {e}")
         raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
 
+    # WR-04: the captured session file IS a live logged-in session — a
+    # credential-equivalent secret (the docstring and .gitignore both classify
+    # it as such). `Path.write_text` would create it with the process umask
+    # default (typically 0644, world-readable), so on a shared/multi-user host
+    # every local user could read a live session. The gitignore only guards
+    # against commit, not local filesystem disclosure. Create it owner-only
+    # (0o600) via os.open so the perms are set atomically at creation, before
+    # any byte of the session is written.
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(state, indent=2))
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The 0o600 mode arg only applies when os.open CREATES the file; if `out`
+    # already existed (an earlier capture with looser perms), O_CREAT leaves its
+    # mode untouched. Force it owner-only on the open fd so a re-captured
+    # session is never left world-readable.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(state, indent=2))
     err_console.print(
         f"[green]session captured[/green] → {out}\n"
         "[yellow]This file is a credential-equivalent secret (gitignored). "
