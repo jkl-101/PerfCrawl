@@ -503,3 +503,35 @@ def test_login_escape_hatch_writes_session_and_parent_survives_killpg(
     assert spawned, "fake_launch was never invoked — login() did not launch Chrome"
     child = spawned[0]
     assert child.poll() is not None, "stand-in Chrome child survived the teardown killpg"
+
+
+def test_login_rejects_url_with_embedded_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-03/AUTH-04: a `login` URL carrying user:pass@ userinfo is rejected and the
+    secret never reaches stderr — and Chrome is never even launched.
+    """
+    out = tmp_path / "session.authstate.json"
+    secret = "admin123"
+
+    # If the rejection ever regressed, launching would be attempted — make that a
+    # hard failure so this test can't silently pass by mocking the leak away.
+    def _must_not_launch(headless: bool = True):  # noqa: ARG001 — signature parity
+        raise AssertionError("login launched Chrome despite a credential-bearing URL")
+
+    monkeypatch.setattr("perfcrawl.cli._launch_chrome_with_cdp_port", _must_not_launch)
+
+    result = runner.invoke(
+        app,
+        ["login", f"https://admin:{secret}@example.com/login/", "--out", str(out)],
+    )
+
+    assert result.exit_code == ExitCode.USER_ERROR, (
+        f"expected USER_ERROR rejecting a credential-bearing login URL, "
+        f"got exit={result.exit_code} exc={result.exception!r}"
+    )
+    # The live password must NOT appear in any output stream.
+    assert secret not in result.stdout
+    assert secret not in (result.stderr or "")
+    # Nothing should have been written.
+    assert not out.exists()

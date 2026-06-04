@@ -772,6 +772,26 @@ def login(
 
     from perfcrawl.auth import validate_storage_state
 
+    # WR-03 / AUTH-04: unlike `crawl`, `login` has no --user/--pass to seed a
+    # scrubber from — its one secret-bearing input is a URL that may carry
+    # userinfo (`https://user:pass@site/login/`). The banner (success) and the
+    # `except` message both interpolate the URL, so a credential-bearing URL
+    # would echo live userinfo to stderr. Reject userinfo up front — a login URL
+    # never legitimately needs HTTP basic-auth userinfo (the whole point is an
+    # interactive form/SSO login), and refusing it removes the leak class
+    # entirely rather than relying on after-the-fact redaction. Defense in depth:
+    # seed a scrubber from any userinfo we did see so even the rejection/diagnostic
+    # paths below never print the raw secret.
+    parsed_url = urlsplit(url)
+    scrub = make_scrubber(parsed_url.username, parsed_url.password)
+    if parsed_url.username or parsed_url.password:
+        err_console.print(
+            "[red]error:[/red] the login URL carries embedded credentials "
+            "(user:pass@host). Pass a plain login URL and log in interactively in "
+            "the opened browser instead — userinfo in the URL is a credential leak risk."
+        )
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
     # Headed launch — the ONLY difference from the audit launch (spike req #3).
     chrome, port, user_data_dir = _launch_chrome_with_cdp_port(headless=False)
     try:
@@ -797,7 +817,9 @@ def login(
             state = ctx.storage_state()
             browser.close()  # disconnect only — the Popen'd Chrome stays alive
     except Exception as e:  # noqa: BLE001 — surface a clean message, never a traceback
-        err_console.print(f"[red]error:[/red] could not capture a session: {e}")
+        # WR-03: scrub the exception text — a Playwright error can echo back the
+        # navigated URL (and any secret it carried) into its message.
+        err_console.print(scrub(f"[red]error:[/red] could not capture a session: {e}"))
         raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
     finally:
         # Pitfall 5: kill + reap Chrome + rmtree the temp profile. For a headed
@@ -834,8 +856,14 @@ def login(
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(json.dumps(state, indent=2))
+    # WR-03: scrub the banner. The URL is rejected up front if it carried
+    # userinfo, so `out` is the only interpolated value here — but route it
+    # through the scrubber too as belt-and-suspenders against any secret that
+    # could have reached the output path.
     err_console.print(
-        f"[green]session captured[/green] → {out}\n"
-        "[yellow]This file is a credential-equivalent secret (gitignored). "
-        "Feed it to `perfcrawl crawl <url> --auth-state " + str(out) + "`.[/yellow]"
+        scrub(
+            f"[green]session captured[/green] → {out}\n"
+            "[yellow]This file is a credential-equivalent secret (gitignored). "
+            "Feed it to `perfcrawl crawl <url> --auth-state " + str(out) + "`.[/yellow]"
+        )
     )
