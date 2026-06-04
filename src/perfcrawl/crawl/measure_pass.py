@@ -149,6 +149,14 @@ def _is_session_loss(landed_url: str | None, status: int | None, login_path: str
         audit followed an auth redirect back to /login/ instead of rendering the
         requested page.
 
+    WR-05 reachability caveat: this predicate is only consulted on the SUCCESS
+    path of ``_measure_one`` (after ``measure_url`` returned a usable RunRecord).
+    If a 401/403 wall yields NO usable Lighthouse result, ``measure_url`` raises
+    ``MeasurementError`` and this predicate is never reached for that page — the
+    401/403 signal is therefore effective only when the error page STILL produced
+    an LHR exposing its ``status_code``. The redirect-to-login signal is the
+    reliable detector; do not overstate the 401/403 path as a complete guarantee.
+
     Never-raise / no false positive: with no ``login_path`` configured (a public
     crawl) and no error status, this returns ``False`` — a public page is never a
     "session loss". A ``None`` landed URL is guarded so a missing/garbage signal
@@ -226,6 +234,21 @@ def _measure_one(
                 attempt += 1
                 continue
             # All samples failed / non-retryable: tag-and-move-on (D-03).
+            #
+            # WR-05 LIMITATION (AUTH-03 scope, not overstated): a session that
+            # expired into a 401/403 wall may yield NO usable Lighthouse result,
+            # in which case measure_url raises MeasurementError("all N samples
+            # failed") and we land HERE — converting the auth failure to a generic
+            # error row. The 401/403 branch of _is_session_loss is only reached on
+            # the SUCCESS path below, i.e. only when the error page STILL produced
+            # an LHR carrying its status_code. So an auth-status session loss whose
+            # error page produces no LHR is recorded as a measurement error and does
+            # NOT trigger the AUTH-03 abort + AUTH_ERROR exit. The redirect-to-login
+            # signal (finalDisplayedUrl → login_path) remains the reliable detector;
+            # the 401/403 status signal is best-effort, contingent on a measurable
+            # error page. (A full fix would thread the audited final status out of
+            # the orchestrator even when metrics are unusable — deferred to avoid
+            # disturbing the never-raise / (run, merged) measure_url contract.)
             return _error_row(url, url_key), None, None
         except (KeyboardInterrupt, SessionLost):
             # Let measure_pass's partial-flush handler catch these (Pitfall 8 /
