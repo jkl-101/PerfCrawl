@@ -129,6 +129,22 @@ def test_login_confirmed_login_url_prefix_is_false():
     assert _login_confirmed(page, "https://site/login/", success_rule=None) is False
 
 
+def test_login_confirmed_other_host_substring_match_is_true():
+    """WR-07: a different-host landing URL that incidentally CONTAINS the full
+    login-URL string as a substring must still confirm the login.
+
+    The old raw-string `login_url not in landed` heuristic mis-classified this
+    as "still on login" (False) and aborted an actually-successful login. The
+    path-based comparison confirms it: the landed PATH (/welcome) differs from
+    the login PATH (/login), so the login is confirmed regardless of the host
+    quirk.
+    """
+    # `landed` literally contains "https://site/login/" as a substring, but the
+    # real landing path is /welcome on a different host.
+    page = _fake_page("https://other.example/r?from=https://site/login/&to=/welcome")
+    assert _login_confirmed(page, "https://site/login/", success_rule=None) is True
+
+
 def test_login_confirmed_success_text_marker_in_content_is_true():
     """success_text rule: marker present in page content ⇒ True even if URL matches."""
     page = _fake_page("https://site/login/", content="<div>AUTHENTICATED_OK</div>")

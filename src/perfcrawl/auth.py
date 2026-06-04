@@ -33,6 +33,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -119,10 +120,18 @@ def _login_confirmed(page: Any, login_url: str, success_rule: dict[str, str] | N
             except Exception:
                 return False
 
-    # Default redirect heuristic: still on the login path ⇒ not logged in.
-    # Use prefix containment so a `?next=` query on the login URL still counts
-    # as a failed login.
-    return login_url not in landed and not landed.startswith(login_url)
+    # Default redirect heuristic: still on the login PATH ⇒ not logged in.
+    # WR-07 + IN-02: compare the parsed path component, not raw-string
+    # containment of the full scheme+host+path. Raw containment had two flaws:
+    # (1) a landing URL on a DIFFERENT host that incidentally contained the
+    # login URL substring was mis-read as "still on login" and aborted an
+    # actually-successful login; (2) the old `startswith` clause was dead —
+    # `landed.startswith(login_url)` strictly implies `login_url in landed`, so
+    # it could never change the result. Comparing paths fixes both: a `?next=`
+    # query on the login URL still shares the login path (⇒ not confirmed),
+    # while a redirect to any other path (typically the post-login landing
+    # page) confirms the login regardless of host.
+    return urlsplit(landed).path != urlsplit(login_url).path
 
 
 def do_form_login(
@@ -151,31 +160,46 @@ def do_form_login(
     ``playwright_login``.
     """
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
-        # DEFAULT context (spike requirement #1 / D-03). `contexts[0]` is the
-        # context the Lighthouse CDP target navigates in; a session on any
-        # isolated per-sample context is invisible to it. A real
-        # `connect_over_cdp` always exposes the default context at index 0.
-        ctx = browser.contexts[0]
-        page = ctx.new_page()
-        # CR-01 (AUTH-04): every Playwright failure in this interaction block (a
-        # wrong --user-sel/--pass-sel is the routine failure mode) MUST surface
-        # as a credential-free AuthError, NOT a raw Playwright exception. A raw
-        # exception sails past the CLI's `except AuthError` arm and Typer prints
-        # a traceback whose frame locals carry `password=<live value>` — the
-        # scrubber is never applied. `from None` suppresses that chain so the
-        # live secret in those frames is never surfaced. The message names the
-        # likely cause WITHOUT echoing any credential or selector value. The
-        # `with sync_playwright()` context manager tears down the Playwright
-        # connection on exception; this does NOT kill the Popen'd Chrome (the
-        # caller owns Chrome's lifecycle — `browser.close()` is a disconnect
-        # only, per the spike findings), so no Chrome kill is added here.
+        # CR-01 + WR-02 (AUTH-04): every Playwright failure across the WHOLE
+        # connect→page→interact→capture block (not just the interaction) MUST
+        # surface as a credential-free AuthError, NOT a raw Playwright exception.
+        # A raw exception sails past the CLI's `except AuthError` arm and Typer
+        # prints a traceback whose `do_form_login` frame locals carry
+        # `password=<live value>` — the scrubber is never applied. `from None`
+        # suppresses that chain so the live secret in those frames is never
+        # surfaced. WR-02 widened the original CR-01 guard (which covered only
+        # goto→fill→click) to ALSO cover `connect_over_cdp`, the default-context
+        # presence check, `new_page()`, and `storage_state()` capture, so
+        # do_form_login is self-contained: its credential-safety no longer
+        # depends on a scrubbed catch-all in the caller. A `connect_over_cdp`
+        # failure, an empty `contexts` list (a CDP endpoint exposing no default
+        # context — a documented spike failure mode), or a `new_page()` /
+        # `storage_state()` raise now all become a clean AuthError. The message
+        # names the likely cause WITHOUT echoing any credential or selector
+        # value. The `with sync_playwright()` context manager tears down the
+        # Playwright connection on exception; this does NOT kill the Popen'd
+        # Chrome (the caller owns Chrome's lifecycle — `browser.close()` is a
+        # disconnect only, per the spike findings), so no Chrome kill is added.
         try:
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            # DEFAULT context (spike requirement #1 / D-03). `contexts[0]` is the
+            # context the Lighthouse CDP target navigates in; a session on any
+            # isolated per-sample context is invisible to it. A real
+            # `connect_over_cdp` always exposes the default context at index 0;
+            # an empty list means the endpoint exposed no default context.
+            if not browser.contexts:
+                raise AuthError("CDP endpoint exposed no default context")
+            ctx = browser.contexts[0]
+            page = ctx.new_page()
             page.goto(login_url, wait_until="load")
             page.fill(user_sel, username)
             page.fill(pass_sel, password)
             page.click(submit_sel)
             page.wait_for_load_state("load", timeout=LOGIN_WAIT_TIMEOUT_MS)
+        except AuthError:
+            # Already credential-free (the no-context guard above) — re-raise as
+            # is so it keeps its specific message; do not re-wrap.
+            raise
         except Exception:
             raise AuthError(
                 "could not complete the login form — check --login-url and the "
@@ -183,12 +207,23 @@ def do_form_login(
             ) from None
         if not _login_confirmed(page, login_url, success_rule):
             browser.close()
+            # IN-03: `from None` for uniformity with the CR-01 hardening. No
+            # exception is active here (the no-context/interaction guard above
+            # already returned), so this carries no credential today, but the
+            # explicit suppression keeps every AuthError on this path uniform.
             raise AuthError(
                 "login could not be confirmed — post-submit page is still the "
                 "login page (check selectors/credentials or pass --success-text)"
-            )
-        # Capture the portable session currency BEFORE disconnecting (D-02).
-        state = ctx.storage_state()
+            ) from None
+        # Capture the portable session currency BEFORE disconnecting (D-02). This
+        # is now inside the guard too (WR-02): a storage_state() failure becomes
+        # a credential-free AuthError rather than a raw chained Playwright error.
+        try:
+            state = ctx.storage_state()
+        except Exception:
+            raise AuthError(
+                "could not capture the authenticated session after login"
+            ) from None
         browser.close()  # disconnect only — the Popen'd Chrome stays alive
     return validate_storage_state(state)
 
