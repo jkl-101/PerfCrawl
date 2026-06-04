@@ -237,6 +237,34 @@ def test_run_metadata_stamped(monkeypatch) -> None:
     assert run.started_at.tzinfo is not None  # tz-aware (D-17)
 
 
+def test_auth_used_true_when_auth_state_passed(monkeypatch) -> None:
+    """WR-05 (D-17): the crawl-level aggregate RunRecord records auth_used=True
+    when an auth_state is threaded into measure_pass."""
+    _patch_measure(monkeypatch)
+    run, _ = measure_pass(
+        _in_scope("https://example.com/p1", "https://example.com/p2"),
+        [],
+        cfg=CrawlConfig(),
+        target="https://example.com/",
+        auth_state={"cookies": [{"name": "sid", "value": "abc"}]},
+    )
+    assert run.auth_used is True
+
+
+def test_auth_used_false_when_no_auth_state(monkeypatch) -> None:
+    """WR-05 (D-17): an unauthenticated crawl records auth_used=False (NOT None),
+    so downstream history/export/regression never see a null auth flag."""
+    _patch_measure(monkeypatch)
+    run, _ = measure_pass(
+        _in_scope("https://example.com/p1", "https://example.com/p2"),
+        [],
+        cfg=CrawlConfig(),
+        target="https://example.com/",
+        # no auth_state passed
+    )
+    assert run.auth_used is False
+
+
 # --------------------------------------------------------------------------- #
 # Aggregate round-trips through the store with no duplicate-url_key ValueError
 # --------------------------------------------------------------------------- #

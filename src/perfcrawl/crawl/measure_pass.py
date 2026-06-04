@@ -384,6 +384,15 @@ def measure_pass(
         id=uuid4(),
         started_at=datetime.now(UTC),
         target=target,
+        # WR-05 (D-17): stamp the crawl-level auth flag. The single-URL path sets
+        # this on its RunRecord (orchestrator.measure_url), but the crawl path
+        # built its aggregate RunRecord here and omitted the field, so it
+        # defaulted to None — every `perfcrawl crawl` run, authenticated or not,
+        # persisted/exported auth_used=None. measure_pass already receives
+        # auth_state, so the information is in hand; propagate it so SQLite
+        # history, CSV/JSON export, and future regression self-joins get correct
+        # run metadata.
+        auth_used=auth_state is not None,
         chrome_version=first_run.chrome_version if first_run else None,
         lighthouse_version=first_run.lighthouse_version if first_run else None,
         throttling=first_run.throttling if first_run else None,
