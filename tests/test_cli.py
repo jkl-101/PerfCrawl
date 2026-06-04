@@ -15,17 +15,22 @@ Test strategy:
 
 import inspect
 import json
+import os
 import re
+import signal
 import sqlite3
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from typer.testing import CliRunner
 
+from perfcrawl.auth import validate_storage_state
 from perfcrawl.cli import app
-from perfcrawl.constants import ExitCode, INP_PROXY_DISPLAY_LABEL
+from perfcrawl.constants import INP_PROXY_DISPLAY_LABEL, ExitCode
 from perfcrawl.models import MetricSample, PageResult, RunRecord
 from perfcrawl.orchestrator import MeasurementError, UserError
 
@@ -126,17 +131,13 @@ def test_exit_zero_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     run = _make_stub_run()
     artifacts = _make_stub_artifacts(run)
     _patch_measure(monkeypatch, return_value=(run, artifacts))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
 
 
 def test_exit_one_on_user_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_measure(monkeypatch, side_effect=UserError("URL is empty"))
-    result = runner.invoke(
-        app, ["measure", "", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.USER_ERROR
     # Error message surfaces on stderr per D-06.
     assert "URL is empty" in result.stderr or "URL is empty" in result.stdout
@@ -144,14 +145,9 @@ def test_exit_one_on_user_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 def test_exit_two_on_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_measure(monkeypatch, side_effect=MeasurementError("all 3 samples failed"))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.MEASUREMENT_ERROR
-    assert (
-        "samples failed" in result.stderr
-        or "samples failed" in result.stdout
-    )
+    assert "samples failed" in result.stderr or "samples failed" in result.stdout
 
 
 def test_exit_one_when_output_dir_unwriteable(
@@ -204,9 +200,7 @@ def test_no_json_flag_emits_rich_table_on_stdout(
     """Default mode prints a human-readable Rich table with the labeled INP row."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
     # Not valid JSON.
     with pytest.raises(json.JSONDecodeError):
@@ -215,15 +209,11 @@ def test_no_json_flag_emits_rich_table_on_stdout(
     assert INP_PROXY_DISPLAY_LABEL in result.stdout
 
 
-def test_inp_label_visible_in_rich_table(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_inp_label_visible_in_rich_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The Rich row label reads the constants string verbatim (defense in depth)."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
     assert INP_PROXY_DISPLAY_LABEL in result.stdout
     # The TBT median (42) appears alongside the label.
@@ -235,23 +225,17 @@ def test_inp_label_visible_in_rich_table(
 # --------------------------------------------------------------------------- #
 
 
-def test_persistence_writes_to_sqlite(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_persistence_writes_to_sqlite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
 
     db_path = tmp_path / "perfcrawl.db"
     assert db_path.exists(), f"SQLite db missing at {db_path}"
     conn = sqlite3.connect(db_path)
     try:
-        rows = conn.execute(
-            "SELECT id FROM runs WHERE id = ?", (str(run.id),)
-        ).fetchall()
+        rows = conn.execute("SELECT id FROM runs WHERE id = ?", (str(run.id),)).fetchall()
         assert len(rows) == 1
     finally:
         conn.close()
@@ -266,9 +250,7 @@ def test_on_disk_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     """``<output_dir>/<run_id>/{result.json,result.csv,lighthouse/*.json,*.html}`` all exist."""
     run = _make_stub_run()
     _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     assert result.exit_code == ExitCode.SUCCESS
 
     run_dir = tmp_path / str(run.id)
@@ -331,9 +313,7 @@ def test_render_human_table_handles_empty_pages(
         pages=[],  # IN-02: this is the regression vector.
     )
     _patch_measure(monkeypatch, return_value=(empty_run, {}))
-    result = runner.invoke(
-        app, ["measure", "https://example.com", "--output-dir", str(tmp_path)]
-    )
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
     # Should not raise IndexError — exit cleanly (success, with a notice).
     assert result.exit_code == ExitCode.SUCCESS, (
         f"empty-pages RunRecord crashed the CLI: "
@@ -341,3 +321,185 @@ def test_render_human_table_handles_empty_pages(
     )
     # A clean message tells the user there was nothing to render.
     assert "No pages measured" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# perfcrawl login — D-04 SSO/MFA escape hatch (UAT test-6 regression)
+#
+# Root cause (04-UAT.md, test 6): login()'s finally runs
+# ``os.killpg(os.getpgid(chrome.pid), 15)`` to reap an orphaned headed Chrome,
+# but ``_launch_chrome_with_cdp_port`` Popen'd Chrome WITHOUT
+# ``start_new_session=True`` — so Chrome shared perfcrawl's process group and the
+# killpg SIGTERM'd perfcrawl itself, AFTER the session was captured but BEFORE
+# validate + the owner-only file write. The shell returned clean, no file, no
+# error. The existing unit suite stubbed the launch/teardown, so the real
+# killpg-against-a-shared-group path never executed in test — this section
+# closes that blind spot. Default (non-e2e) suite: no real Chrome / Node /
+# network. Credential-safety invariant: the fabricated session carries a fake
+# ``sessionid`` cookie only — never a username/password literal.
+# --------------------------------------------------------------------------- #
+
+
+class _FakePage:
+    """Stand-in Playwright page: goto is a no-op."""
+
+    def goto(self, url, wait_until=None):  # noqa: ARG002 — signature parity
+        return None
+
+
+class _FakeContext:
+    """Stand-in DEFAULT context: new_page + a VALID minimal storage_state."""
+
+    def new_page(self):
+        return _FakePage()
+
+    def storage_state(self):
+        # Valid per validate_storage_state (>=1 cookie). Fake sessionid only —
+        # no credential literal ever appears in the captured artifact.
+        return {"cookies": [{"name": "sessionid", "value": "x"}], "origins": []}
+
+    def close(self):  # pragma: no cover — login() does not call ctx.close()
+        return None
+
+
+class _FakeBrowser:
+    """Stand-in CDP browser: exposes a single DEFAULT context, close is a no-op."""
+
+    def __init__(self):
+        self.contexts = [_FakeContext()]
+
+    def close(self):
+        return None
+
+
+class _FakeChromium:
+    def connect_over_cdp(self, url):  # noqa: ARG002 — signature parity
+        return _FakeBrowser()
+
+
+class _FakeSyncPlaywright:
+    """Context manager mimicking ``sync_playwright()`` → object with ``.chromium``."""
+
+    def __enter__(self):
+        obj = type("PW", (), {})()
+        obj.chromium = _FakeChromium()
+        return obj
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_sync_playwright():
+    return _FakeSyncPlaywright()
+
+
+def test_launch_isolation_killpg_does_not_kill_parent() -> None:
+    """Test A (launch-side isolation): a child Popen'd with start_new_session=True
+    is its own process-group leader, and killpg on its group leaves THIS process
+    (the perfcrawl stand-in) alive.
+
+    This is the invariant ``_launch_chrome_with_cdp_port`` must guarantee so that
+    login()'s ``os.killpg(os.getpgid(chrome.pid), ...)`` targets only Chrome's
+    group, never perfcrawl's.
+    """
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        # The child is its own session/process-group leader, distinct from ours.
+        assert os.getpgid(child.pid) == child.pid
+        assert os.getpgid(child.pid) != os.getpgid(0)
+
+        # killpg the child's group — SIGTERM must NOT reach this process.
+        os.killpg(os.getpgid(child.pid), signal.SIGTERM)
+    finally:
+        # Reap to avoid a zombie regardless of how the assertions land.
+        child.wait()
+
+    # Reaching here proves the parent (perfcrawl stand-in) survived the killpg.
+    assert child.poll() is not None
+
+
+def test_login_escape_hatch_writes_session_and_parent_survives_killpg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test B (real login teardown, real child group, real killpg): drive the
+    REAL ``perfcrawl.cli.login`` Click command so its ``finally`` block runs the
+    real ``os.killpg(os.getpgid(chrome.pid), 15)`` against a REAL isolated child
+    process group — the precise blind spot the stubbed-launch suite missed.
+
+    Before Task 2 (orchestrator launches Chrome WITHOUT start_new_session=True)
+    the real login() flow self-terminates via the killpg and the --out file is
+    never written. After the fix the test process survives and the file is
+    written + validates.
+    """
+    out = tmp_path / "session.authstate.json"
+    spawned: list = []  # captures the stand-in child for the post-run liveness check
+
+    # Couple the stand-in's launch to the REAL launcher's behavior so this is a
+    # genuine regression, not a tautology: the child is spawned with the SAME
+    # ``start_new_session`` value the real ``_launch_chrome_with_cdp_port`` uses.
+    # Before Task 2 the orchestrator source lacks ``start_new_session=True`` →
+    # the child shares THIS test process's group → login()'s real killpg SIGTERMs
+    # the test process before the file is written (UAT test-6 reproduced: the
+    # CliRunner subprocess of pytest dies / the --out file is never written).
+    # After Task 2 the source carries the flag → the child is its own group
+    # leader → the killpg is isolated and the file IS written + validates.
+    import perfcrawl.orchestrator as _orch
+
+    _launcher_uses_new_session = "start_new_session=True" in inspect.getsource(
+        _orch._launch_chrome_with_cdp_port
+    )
+
+    def fake_launch(headless: bool = True):  # noqa: ARG001 — signature parity
+        # Spawn a real long-sleeping child EXACTLY the way the real launcher does
+        # (same start_new_session disposition). The real login() finally will
+        # ``os.killpg(os.getpgid(child.pid), 15)`` this child's group.
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            start_new_session=_launcher_uses_new_session,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        spawned.append(child)
+        user_data_dir = tmp_path / "chrome-user-data"
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        # Port is unused — the fake CDP browser ignores it.
+        return child, 0, user_data_dir
+
+    # login() does ``from playwright.sync_api import sync_playwright`` locally, so
+    # the local import binds to playwright.sync_api.sync_playwright at call time.
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", _fake_sync_playwright)
+    monkeypatch.setattr("perfcrawl.cli._launch_chrome_with_cdp_port", fake_launch)
+
+    result = runner.invoke(
+        app, ["login", "https://example.com/login/", "--out", str(out)], input="\n"
+    )
+
+    # 1. The command completed and the result is reachable — the test process
+    #    (perfcrawl stand-in) was NOT killed by the teardown killpg. If the
+    #    killpg had targeted the shared group, this process would have died
+    #    before we could assert. (Before Task 2: the real launcher shares the
+    #    group, so this is the assertion that flips RED→GREEN.)
+    assert result.exit_code == ExitCode.SUCCESS, (
+        f"login did not exit cleanly: exit={result.exit_code} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r} exc={result.exception!r}"
+    )
+
+    # 2. The --out file exists, parses as JSON, and validates.
+    assert out.exists(), f"--out session file was not written at {out}"
+    state = json.loads(out.read_text())
+    validate_storage_state(state)  # raises AuthError if invalid
+
+    # 3. WR-04 preserved: the session file is owner-only (0o600).
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+
+    # 4. The stand-in child (headed-Chrome proxy) was killed by the teardown
+    #    killpg. _teardown_chrome (chrome.kill() + chrome.wait()) reaps it, so
+    #    poll() is not None once login() returned.
+    assert spawned, "fake_launch was never invoked — login() did not launch Chrome"
+    child = spawned[0]
+    assert child.poll() is not None, "stand-in Chrome child survived the teardown killpg"
