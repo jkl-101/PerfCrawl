@@ -694,23 +694,26 @@ def crawl(
     }
 
     # --- Write outputs (OUT-03/OUT-04). OSError → USER_ERROR per D-15. ---
+    # D-07 / AUTH-04 (CR-01, WR-02): thread the credential scrubber INTO
+    # write_outputs so result.json AND result.csv are scrubbed at write time —
+    # the first and only on-disk copy of each is already redacted. This closes
+    # two holes at once: (CR-01) result.csv was previously written unscrubbed
+    # from the raw RunRecord, leaking a URL-embedded credential into a persisted
+    # artifact; (WR-02) the old post-write result.json re-scrub was a second,
+    # NON-atomic write that briefly left an unscrubbed file on disk and could
+    # truncate the file on a short write. Scrubbing inside the single atomic
+    # write removes both the leak and the window, and means a future fourth
+    # text output sink cannot silently miss the scrubber.
     try:
-        run_dir = write_outputs(run_record, output_dir=output_dir, raw_artifacts=scrubbed_artifacts)
+        run_dir = write_outputs(
+            run_record,
+            output_dir=output_dir,
+            raw_artifacts=scrubbed_artifacts,
+            scrub=scrub,
+        )
     except OSError as e:
         err_console.print(scrub(f"[red]error:[/red] cannot write to {output_dir}: {e}"))
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
-
-    # D-07: scrub the result.json that write_outputs already wrote from the
-    # RunRecord (its target/page URLs could carry an embedded credential). Re-emit
-    # the scrubbed model JSON over the file so no credential survives in result.json.
-    result_json = run_dir / "result.json"
-    if result_json.exists():
-        try:
-            result_json.write_text(scrub(run_record.model_dump_json(indent=2)))
-        except OSError:
-            # Non-fatal: the artifacts above are already scrubbed; a re-write
-            # failure must not crash a successful crawl.
-            pass
 
     # --- Persist the one multi-page run to SQLite (HIST-01). ---
     db_path = output_dir / "perfcrawl.db"

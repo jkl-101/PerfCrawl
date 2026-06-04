@@ -109,6 +109,49 @@ def test_csv_values_round_trip(sample_run: RunRecord, tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# CR-01 / AUTH-04: a credential embedded in a URL must NOT survive into ANY
+# sink write_outputs owns — including result.csv, which was the leak. The
+# scrubber threaded into write_outputs redacts result.json AND result.csv at
+# write time. The prior e2e guard only put creds in the LOGIN FORM, so the
+# URL-embedded-credential path (userinfo / credential-bearing query / redirect
+# echoed into slowest_request_url) was never exercised — this closes that gap.
+# --------------------------------------------------------------------------- #
+
+
+def test_url_embedded_credential_scrubbed_from_csv_and_json(tmp_path: Path) -> None:
+    """A credential in page.url / slowest_request_url is redacted in result.csv & result.json."""
+    from perfcrawl.auth import make_scrubber
+
+    secret = "admin123"
+    # The credential rides in BOTH the page URL userinfo AND a query param echoed
+    # into slowest_request_url — the two columns (_build_csv_row emits `url` and
+    # `slowest_request_url`) the CSV leaks straight from the as-measured PageResult.
+    leak_run = RunRecord(
+        id=UUID("3f1c2b9a-0000-4000-8000-000000000eee"),
+        started_at=datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC),
+        target=f"https://admin:{secret}@x.com/",
+        pages=[
+            PageResult(
+                url=f"https://admin:{secret}@x.com/dashboard/",
+                url_key="https://x.com/dashboard/",
+                perf_score=80.0,
+                slowest_request_url=f"https://x.com/api/?token={secret}",
+            )
+        ],
+    )
+    scrub = make_scrubber("admin", secret)
+    run_dir = write_outputs(leak_run, output_dir=tmp_path, scrub=scrub)
+
+    csv_text = (run_dir / "result.csv").read_text()
+    json_text = (run_dir / "result.json").read_text()
+    assert secret not in csv_text, "credential leaked into result.csv (CR-01)"
+    assert secret not in json_text, "credential leaked into result.json"
+    # The redaction placeholder proves the scrubber actually fired (not that the
+    # secret merely happened to be absent because the URL was dropped).
+    assert "***REDACTED***" in csv_text
+
+
+# --------------------------------------------------------------------------- #
 # Raw LH artifacts (OUT-03) land at lighthouse/<page-slug>.{json,html}.
 # --------------------------------------------------------------------------- #
 
