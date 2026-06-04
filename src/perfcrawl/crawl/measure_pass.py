@@ -145,18 +145,36 @@ def _is_session_loss(landed_url: str | None, status: int | None, login_path: str
     Two spike-proven signals, either of which means the session was lost mid-crawl:
 
       - a 401/403 status on the audited page, OR
-      - the Lighthouse ``finalDisplayedUrl`` redirected to the login path
-        (``login_path in landed_url``) — the audit followed an auth redirect back
-        to /login/ instead of rendering the requested page.
+      - the Lighthouse ``finalDisplayedUrl`` redirected to the login path — the
+        audit followed an auth redirect back to /login/ instead of rendering the
+        requested page.
 
     Never-raise / no false positive: with no ``login_path`` configured (a public
     crawl) and no error status, this returns ``False`` — a public page is never a
-    "session loss". ``login_path in (landed_url or "")`` guards a ``None`` landed
-    URL so a missing/garbage signal can never crash or false-trip (T-04-09 / V5).
+    "session loss". A ``None`` landed URL is guarded so a missing/garbage signal
+    can never crash or false-trip (T-04-09 / V5).
+
+    WR-01: the login-redirect signal compares the landed URL's *parsed path* on a
+    segment boundary, NOT a raw substring. The old ``login_path in landed_url``
+    test false-tripped on a degenerate ``login_path`` of ``"/"`` (the path of a
+    bare ``https://site/`` or any root ``--login-url``), because ``"/"`` is a
+    substring of essentially every absolute URL — every authenticated page was
+    flagged as a session loss and the crawl aborted on page 1. A root
+    ``login_path`` ("/" or empty) is therefore treated as "no usable login path"
+    and never trips; a non-root path matches only on an exact path or a true
+    sub-path (``/login`` matches ``/login`` and ``/login/?next=…`` but NOT
+    ``/login-help/``).
     """
     if status in (401, 403):
         return True
-    return bool(login_path) and login_path in (landed_url or "")
+    if not login_path or login_path == "/":
+        return False
+    try:
+        landed_path = urlsplit(landed_url or "").path
+    except Exception:
+        return False
+    prefix = login_path.rstrip("/")
+    return landed_path == login_path or landed_path == prefix or landed_path.startswith(prefix + "/")
 
 
 def _measure_one(

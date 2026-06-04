@@ -334,6 +334,16 @@ def test_session_loss_signal() -> None:
     assert _is_session_loss("https://x/dashboard/", 200, "/login/") is False
     # No login path + no signal → NOT a loss (never-raise, no false positive).
     assert _is_session_loss(None, None, "") is False
+    # WR-01: a root login_path "/" (bare https://site/ or any root --login-url)
+    # must NOT trip on every page — "/" is a substring of every absolute URL.
+    assert _is_session_loss("https://x/dashboard/", 200, "/") is False
+    assert _is_session_loss("https://x/", 200, "/") is False
+    # WR-01: segment-boundary match — a path that merely CONTAINS the login path
+    # as a substring is NOT a redirect to login. /login-help/ != a /login redirect.
+    assert _is_session_loss("https://x/login-help/", 200, "/login") is False
+    # ...but a true sub-path of the login path (with ?next=) IS a login redirect.
+    assert _is_session_loss("https://x/login/?next=/dashboard/", None, "/login/") is True
+    assert _is_session_loss("https://x/login", None, "/login/") is True
 
 
 def test_session_loss_partial_flush_abort(monkeypatch) -> None:
