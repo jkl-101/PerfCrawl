@@ -56,8 +56,8 @@ from perfcrawl.crawl import is_error_row
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import discover
 from perfcrawl.crawl.measure_pass import measure_pass
-from perfcrawl.crawl.scope import is_denied
 from perfcrawl.crawl.robots import fetch_robots_gate
+from perfcrawl.crawl.scope import is_denied
 from perfcrawl.orchestrator import (
     MeasurementError,
     UserError,

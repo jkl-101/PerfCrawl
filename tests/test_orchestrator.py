@@ -849,8 +849,8 @@ def test_measure_url_skips_bad_url_value_origins_entries(monkeypatch):
     a bad shape — no exception escapes measure_url, a well-formed origin after
     it is still replayed, and the replay page is closed on the raising path (no
     leak)."""
-    from perfcrawl.orchestrator import measure_url
     import perfcrawl.orchestrator as orch
+    from perfcrawl.orchestrator import measure_url
 
     bad_url = "ftp://nope"
     browser = _BadUrlBrowser(bad_url)
