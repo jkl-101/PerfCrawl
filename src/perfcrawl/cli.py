@@ -608,12 +608,22 @@ def crawl(
         except AuthError as e:
             err_console.print(scrub(f"[red]auth failed:[/red] {e}"))
             raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
+        except MeasurementError as e:
+            # WR-01: a Chrome/launch failure from `_launch_chrome_with_cdp_port`
+            # ("Chrome did not write DevToolsActivePort", any launch breakage) is
+            # a MEASUREMENT_ERROR (2), NOT an auth problem. Keep its own exit band
+            # so `case $? in 3) re-auth ;; esac` scripts can distinguish a
+            # session/login failure (3) from Chrome/LH breakage (2) — otherwise a
+            # broken Chrome env on a form-login crawl makes a re-auth loop forever.
+            # Still scrubbed, since the launch path is on an auth-adjacent flow.
+            err_console.print(scrub(f"[red]measurement failed:[/red] {e}"))
+            raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR)) from None
         except Exception as e:
             # Defense-in-depth (AUTH-04): even a leaked NON-AuthError (e.g. a raw
             # Playwright exception that slipped a wrap) is scrubbed via the
             # creds-seeded `scrub` and mapped to AUTH_ERROR — never an unscrubbed
-            # Typer traceback. Runs AFTER the AuthError arm so AuthError keeps its
-            # own message; `from None` suppresses the chain.
+            # Typer traceback. Runs AFTER the AuthError/MeasurementError arms so
+            # each keeps its own message; `from None` suppresses the chain.
             err_console.print(scrub(f"[red]auth failed:[/red] {e}"))
             raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
 
