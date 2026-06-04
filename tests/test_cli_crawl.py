@@ -274,6 +274,28 @@ def test_exit_two_when_all_pages_fail(monkeypatch, tmp_path: Path, local_server:
     assert result.exit_code == ExitCode.MEASUREMENT_ERROR, result.stdout + result.stderr
 
 
+def test_denied_seed_emits_denylist_hint(monkeypatch, tmp_path: Path, local_server: str) -> None:
+    """WR-06/IN-04: a seed under a denylist token (`/admin/`) is dropped by the
+    always-on destructive-link denylist, yielding 0 measured → MEASUREMENT_ERROR
+    (2). The CLI must name the DENYLIST in a stderr hint so the user isn't left
+    guessing between 'all errored', 'none in scope', and 'denied'."""
+    _patch_measure(monkeypatch)  # measure never runs; the seed is denied pre-fetch
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/admin/dashboard",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.MEASUREMENT_ERROR, result.stdout + result.stderr
+    # The denylist must be named explicitly in the stderr hint.
+    assert "denylist" in result.stderr
+
+
 def test_exit_one_on_empty_url(monkeypatch, tmp_path: Path) -> None:
     """An empty seed URL is a user error (1) before any measurement."""
     calls = _patch_measure(monkeypatch)

@@ -56,6 +56,7 @@ from perfcrawl.crawl import is_error_row
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import discover
 from perfcrawl.crawl.measure_pass import measure_pass
+from perfcrawl.crawl.scope import is_denied
 from perfcrawl.crawl.robots import fetch_robots_gate
 from perfcrawl.orchestrator import (
     MeasurementError,
@@ -663,6 +664,21 @@ def crawl(
             "[red]measurement failed:[/red] no page was measured "
             f"({len(run_record.pages)} discovered, all errored or none in scope)"
         )
+        # WR-06 / IN-04: the always-on destructive-link denylist is a
+        # case-insensitive SUBSTRING match (tokens like `admin`, `remove`,
+        # `archive`, `disable`), with no `--allow` un-deny in v1. For the named
+        # first-target class — owned Django sites whose seed is under `/admin/` —
+        # the seed is silently denied and the crawl reports a generic "0
+        # measured" exit 2 with no hint that the DENYLIST ate it. When the seed
+        # itself is denied, name the denylist explicitly so the user isn't left
+        # guessing between "all errored", "none in scope", and "denied".
+        if is_denied(url, patterns=cfg.deny_patterns):
+            err_console.print(
+                "[yellow]hint:[/yellow] the seed URL was dropped by the "
+                "destructive-link denylist (a case-insensitive substring match on "
+                "tokens like 'admin'/'remove'/'archive'/'disable'). Narrow --deny "
+                "or seed a non-denied path if this crawl was intentional."
+            )
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
 
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches
