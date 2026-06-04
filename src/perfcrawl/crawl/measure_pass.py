@@ -182,7 +182,11 @@ def _is_session_loss(landed_url: str | None, status: int | None, login_path: str
     except Exception:
         return False
     prefix = login_path.rstrip("/")
-    return landed_path == login_path or landed_path == prefix or landed_path.startswith(prefix + "/")
+    return (
+        landed_path == login_path
+        or landed_path == prefix
+        or landed_path.startswith(prefix + "/")
+    )
 
 
 def _measure_one(
