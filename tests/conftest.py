@@ -9,7 +9,13 @@ metric, a NEW page, a REMOVED page, and a metric present on only one side
 """
 
 import json
+import os
+import signal
+import socket
+import subprocess
 import threading
+import time
+import urllib.request
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import partial
@@ -28,6 +34,19 @@ from perfcrawl.models import (
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 LH_FIXTURES_DIR = FIXTURES_DIR / "lighthouse"
+
+# The spike's reusable single-file Django auth fixture (CSRF + sessionid +
+# @login_required /dashboard/, admin/admin123). Phase 4's e2e auth test
+# (tests/test_auth_e2e.py) drives a real form login against it.
+SPIKE_DJANGO_APP = (
+    Path(__file__).resolve().parents[1]
+    / ".claude"
+    / "skills"
+    / "spike-findings-performance-statistics-gathering"
+    / "sources"
+    / "_shared"
+    / "django_app.py"
+)
 # The Phase-3 crawl fixture site (HTML pages the BFS walks). Reused here so the
 # root-level CLI crawl tests (tests/test_cli_crawl.py) can hit a real-but-local
 # HTTP origin without duplicating the fixture server in tests/crawl/conftest.py.
@@ -62,6 +81,90 @@ def local_server() -> Iterator[str]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _stop_django(proc: subprocess.Popen) -> None:
+    """Tear down the whole Django process group (uv parent + grandchild python).
+
+    ``uv run`` spawns the real Django ``python`` as a GRANDCHILD; killing only the
+    ``uv`` parent orphans runserver (it survives with PPID 1). Kill the whole
+    session/process-group so no Django process ever leaks (spike requirement #4).
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+
+@pytest.fixture
+def django_auth_fixture(tmp_path) -> Iterator[str]:
+    """Run the spike's Django auth fixture as a subprocess; yield its base URL.
+
+    Mirrors the spike's ``chrome_cdp.start_django`` / ``stop_django``: launches
+    the single-file ``django_app.py`` via ``uv run --with 'django>=5,<6'`` (so the
+    project takes no Django dependency), waits until ``/login/`` answers 200, then
+    yields ``http://127.0.0.1:<port>``. The whole process group is torn down on
+    teardown. Used only by the ``e2e``-marked authenticated-audit test, which is
+    skipped by default (it needs Node + Chrome + a working ``uv``).
+    """
+    if not SPIKE_DJANGO_APP.exists():
+        pytest.skip(f"spike Django fixture not found at {SPIKE_DJANGO_APP}")
+
+    addr_port = _free_port()
+    addr = f"127.0.0.1:{addr_port}"
+    base = f"http://{addr}"
+    db_path = str(tmp_path / "django-auth-e2e.sqlite3")
+
+    proc = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "--with",
+            "django>=5,<6",
+            "python",
+            str(SPIKE_DJANGO_APP),
+            "runserver",
+        ],
+        cwd=str(SPIKE_DJANGO_APP.parent),
+        env={**os.environ, "SPIKE_ADDR": addr, "SPIKE_DB": db_path},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + 40
+    up = False
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base}/login/", timeout=1) as r:
+                if r.status == 200:
+                    up = True
+                    break
+        except Exception:
+            time.sleep(0.25)
+    if not up:
+        _stop_django(proc)
+        pytest.skip("Django auth fixture did not come up within 40s")
+
+    try:
+        yield base
+    finally:
+        _stop_django(proc)
 
 
 @pytest.fixture

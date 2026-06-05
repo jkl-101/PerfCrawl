@@ -62,7 +62,7 @@ class UserError(Exception):
     """
 
 
-def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
+def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.Popen, int, Path]:
     """Launch Chromium with ``--remote-debugging-port=0`` and read the resolved port.
 
     Per Pitfall 1: Chrome writes the kernel-picked port to
@@ -74,6 +74,13 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
     rather than the persistent-context launcher so the orchestrator can call
     ``browser.new_context()`` for RUN-03 cold-cache cycling (a persistent-context
     Browser has no ``.new_context()`` method).
+
+    ``headless`` (Phase 4 — D-04 `perfcrawl login`): defaults to ``True`` (the
+    measurement audit launch is always headless). The ``login`` subcommand passes
+    ``headless=False`` so the user can complete an SSO/MFA login by hand in a
+    visible window — the ONLY difference from the audit launch (spike requirement
+    #3: the Chrome lifecycle seam is reused unchanged otherwise). All existing
+    callers keep the headless default, so the audit path is byte-for-byte unchanged.
 
     Returns ``(chrome_proc, port, user_data_dir)``. The caller MUST wrap the use
     of the returned values in try/finally that kills the proc and rmtree's the
@@ -102,14 +109,31 @@ def _launch_chrome_with_cdp_port() -> tuple[subprocess.Popen, int, Path]:
             chrome_path,
             f"--user-data-dir={user_data_dir}",
             "--remote-debugging-port=0",
-            "--headless=new",
             "--no-first-run",
             "--no-default-browser-check",
         ]
+        # Headless for the audit launch (default); headed only for `perfcrawl
+        # login` so the user can complete an interactive SSO/MFA login by hand.
+        if headless:
+            argv.insert(3, "--headless=new")
+        # WR-04-06 (UAT test-6 root cause): launch Chrome as its OWN session and
+        # process-group leader. The `perfcrawl login` teardown's
+        # `os.killpg(os.getpgid(chrome.pid), 15)` (cli.py ~804) reaps any orphaned
+        # headed Chrome + its renderer children under a `uv run` re-exec. Without
+        # `start_new_session=True` Chrome shares perfcrawl's process group, so that
+        # killpg SIGTERMs perfcrawl ITSELF — after `ctx.storage_state()` captured
+        # the session but BEFORE `validate_storage_state()` + the owner-only file
+        # write (cli.py:811-833) — and the command exits silently with no --out
+        # file. Making Chrome its own group leader confines the killpg to Chrome's
+        # group only. The two other callers tear down via `chrome.kill()` (a direct
+        # PID signal), which is unaffected by the new process group: the headless
+        # audit launch (measure_url) and the crawl driven-login launch (cli.py:131)
+        # both remain correct.
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
     except Exception:
         # Cleanup-on-raise: same disk-leak class as CR-03, same rmtree pattern.
@@ -165,6 +189,7 @@ def measure_url(
     url: str,
     samples: int = 1,
     emulation: str = "mobile",
+    auth_state: dict | None = None,
 ) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
     """Measure one URL end-to-end (D-05): Chrome → CDP → per-sample LH → aggregate.
 
@@ -173,6 +198,25 @@ def measure_url(
     ``{url_key: (reportJson, reportHtml)}`` populated from the FIRST successful
     sample's worker envelope. The CLI (02-04) destructures and forwards
     ``raw_artifacts`` to ``output.write_outputs`` for OUT-03 (raw LH artifacts on disk).
+
+    Authenticated audits (Phase 4, AUTH-01 — D-02/D-03):
+
+      When ``auth_state`` is supplied (a Playwright ``storage_state`` dict from
+      ``auth.do_form_login`` / ``auth.resolve_auth_state``), the captured session
+      is replayed onto ``browser.contexts[0]`` — the DEFAULT context the
+      Lighthouse CDP target navigates in — and the per-sample loop runs DIRECTLY
+      on that default context. It does NOT call ``browser.new_context()``: an
+      isolated context is invisible to the Lighthouse target, so logging in there
+      silently captures a logged-out page (Pitfall 1). Cold-cache fidelity (D-03)
+      is preserved by Lighthouse 13's own per-navigation cache disabling + its
+      default ``clearStorageTypes`` (``cache_storage`` / ``service_workers``),
+      which never clears cookies (Pitfall 2). The public path (``auth_state is
+      None``) keeps the existing ``new_context()`` cold-cache cycle UNCHANGED.
+
+      The first successful sample's ``finalDisplayedUrl`` is surfaced on the
+      returned ``RunRecord.final_displayed_url`` so the downstream session-loss
+      check (Plan 03) can detect a /login/ landing — NOT by extending the return
+      tuple (the contract is the RunRecord field).
 
     Failure paths:
 
@@ -191,9 +235,7 @@ def measure_url(
     if samples < 1:
         raise UserError(f"--samples must be >= 1; got {samples}")
     if emulation not in {"mobile", "desktop"}:
-        raise UserError(
-            f"--emulation must be 'mobile' or 'desktop'; got {emulation!r}"
-        )
+        raise UserError(f"--emulation must be 'mobile' or 'desktop'; got {emulation!r}")
 
     # --- Worker preflight (fails fast before Chrome is launched) ---
     preflight()
@@ -204,15 +246,76 @@ def measure_url(
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
 
+            # --- Phase 4 (D-02/D-03): replay the captured session onto the
+            # DEFAULT context BEFORE auditing. The session MUST live on
+            # `browser.contexts[0]` because that is the context the Lighthouse
+            # CDP target navigates in; a session on any isolated `new_context()`
+            # is invisible to it (Pitfall 1, spike 003 Arm B). For a cookie-only
+            # Django session only `add_cookies` runs; the `origins` localStorage
+            # replay is a no-op unless the captured state carried token-in-
+            # localStorage origins (A5 / Open-Q1).
+            if auth_state is not None:
+                default_ctx = browser.contexts[0]
+                if auth_state.get("cookies"):
+                    default_ctx.add_cookies(auth_state["cookies"])
+                for origin in auth_state.get("origins", []):
+                    # CR-02 (AUTH-04 reliability): a hand-edited/--auth-state file
+                    # can pass validate_storage_state's presence-only check yet
+                    # carry malformed origins. Skip-tolerate (continue) each bad
+                    # entry — never raise KeyError/TypeError — to honor the
+                    # module's "Never crashes on garbage" promise.
+                    if not isinstance(origin, dict) or not origin.get("origin"):
+                        continue
+                    origin_url = origin.get("origin")
+                    pg = default_ctx.new_page()
+                    # WR-03 (AUTH-04 reliability): CR-02 guarded entry SHAPE, but a
+                    # well-formed-but-hostile VALUE — `"origin": "ftp://x"`,
+                    # `"origin": "not a url"`, or an origin that hangs `goto` — is a
+                    # non-empty string that passes the shape guard, then `pg.goto`
+                    # raises and the exception escapes measure_url. Wrap the per-
+                    # origin replay so a bad URL value is skip-tolerated like a bad
+                    # shape (honoring the module's "Never crashes on garbage"
+                    # promise) instead of silently turning EVERY authenticated page
+                    # into an error row. `pg` is closed in a finally so the replay
+                    # page is never leaked on the raising path.
+                    try:
+                        pg.goto(origin_url, wait_until="commit")
+                        for item in origin.get("localStorage", []):
+                            if (
+                                not isinstance(item, dict)
+                                or "name" not in item
+                                or "value" not in item
+                            ):
+                                continue
+                            pg.evaluate(
+                                "([k, v]) => localStorage.setItem(k, v)",
+                                [item["name"], item["value"]],
+                            )
+                    except Exception:
+                        continue
+                    finally:
+                        try:
+                            pg.close()
+                        except Exception:
+                            pass
+
             per_sample_results: list[PageResult] = []
             lhr_for_metadata: dict | None = None
             first_raw_report: tuple[str, str] | None = None
+            final_displayed_url: str | None = None
 
             for _sample_idx in range(samples):
-                # D-03 cold cache: a fresh BrowserContext per sample. The Chrome
-                # process stays alive across samples; isolation comes from
-                # cycling the context, not from killing the browser.
-                context = browser.new_context()
+                # D-02/D-03 reconciliation: the authenticated path MUST run on
+                # the DEFAULT context (where the replayed session lives) — calling
+                # `browser.new_context()` here would isolate the audit from the
+                # session and silently capture a logged-out page (Pitfall 1). The
+                # public path keeps the fresh-context-per-sample cold-cache cycle;
+                # for the auth path, cold-cache fidelity comes from Lighthouse 13's
+                # own per-navigation cache disabling + default `clearStorageTypes`
+                # (`cache_storage`/`service_workers`), NOT from a fresh context
+                # (Pitfall 2). The Chrome process stays alive across samples either
+                # way; isolation never comes from killing the browser.
+                context = None if auth_state is not None else browser.new_context()
                 try:
                     # D-14: initial attempt, then one retry on failure.
                     lh = run_one_sample(
@@ -234,6 +337,11 @@ def measure_url(
                         per_sample_results.append(page_result)
                         if lhr_for_metadata is None:
                             lhr_for_metadata = lhr
+                        if final_displayed_url is None:
+                            # AUTH-03 signal: the first successful sample's landing
+                            # URL. A /login/ value means the session was lost; the
+                            # downstream check (Plan 03) reads this off the RunRecord.
+                            final_displayed_url = lhr.get("finalDisplayedUrl")
                         if first_raw_report is None and (
                             lh.get("reportJson") or lh.get("reportHtml")
                         ):
@@ -259,7 +367,12 @@ def measure_url(
                                 lh.get("reportHtml") or "",
                             )
                 finally:
-                    context.close()
+                    # Public path cycles a fresh context per sample (close it);
+                    # the auth path runs on the persistent default context, which
+                    # must NOT be closed between samples (closing it would drop
+                    # the replayed session for subsequent samples — D-02/D-03).
+                    if context is not None:
+                        context.close()
 
             if not per_sample_results:
                 # D-14 + T-02-03-PARTIAL: never produce a silently-empty PageResult.
@@ -290,17 +403,20 @@ def measure_url(
                 id=uuid4(),
                 started_at=datetime.now(UTC),
                 target=url,
+                auth_used=auth_state is not None,
                 chrome_version=chrome_version,
                 lighthouse_version=lighthouse_version,
                 throttling=throttling,
                 emulation=emulation,
+                # AUTH-03: surface the first sample's finalDisplayedUrl so the
+                # downstream session-loss check reads it off the RunRecord
+                # (NOT via the return tuple — D-02/D-06).
+                final_displayed_url=final_displayed_url,
                 pages=[aggregated],
             )
 
             raw_artifacts: dict[str, tuple[str, str]] = (
-                {aggregated.url_key: first_raw_report}
-                if first_raw_report is not None
-                else {}
+                {aggregated.url_key: first_raw_report} if first_raw_report is not None else {}
             )
             return run_record, raw_artifacts
     finally:

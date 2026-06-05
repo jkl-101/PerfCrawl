@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from perfcrawl.constants import (
     DEFAULT_CONCURRENCY,
     DEFAULT_CRAWL_SAMPLES_N,
+    DEFAULT_DENY_PATTERNS,
     DEFAULT_MAX_DEPTH,
     DEFAULT_MAX_PAGES,
     DEFAULT_MIN_DELAY_S,
@@ -57,3 +58,22 @@ class CrawlConfig:
 
     # --- D-04: list-only discovery, no measurement ---
     dry_run: bool = False
+
+    # --- D-05: always-on destructive-link denylist (substring, case-insensitive) ---
+    # Default traces to DEFAULT_DENY_PATTERNS (constants.py — the one editable place;
+    # NEVER inline the literal set). field(default_factory=...) mirrors the mutable-list
+    # pattern of includes/excludes above so each CrawlConfig gets its own list and a
+    # ``--deny`` extension can append without mutating the shared built-in set.
+    deny_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_DENY_PATTERNS))
+
+    # --- D-01: authenticated-crawl inputs (login form + session-state handoff) ---
+    # Carried on the config so the single admission path can exclude the login URL
+    # (AUTH-04/D-07) and the measurement pass can drive the form login / replay a
+    # saved storage_state. All default None (public crawl) — set by the CLI layer.
+    login_url: str | None = None  # AUTH-04/D-07: excluded from the audited set
+    user_sel: str | None = None  # CSS selector for the username field
+    pass_sel: str | None = None  # CSS selector for the password field
+    submit_sel: str | None = None  # CSS selector for the submit control
+    auth_state_path: str | None = None  # path to a saved Playwright storage_state JSON
+    success_text: str | None = None  # optional login-success marker text
+    success_url: str | None = None  # optional login-success landing URL

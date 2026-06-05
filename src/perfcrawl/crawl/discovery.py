@@ -44,7 +44,7 @@ from urllib.parse import urldefrag, urljoin, urlsplit
 from perfcrawl.canonical import canonical_key
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.robots import RobotsGate
-from perfcrawl.crawl.scope import VariantCounter, in_scope, passes_filters
+from perfcrawl.crawl.scope import VariantCounter, in_scope, is_denied, passes_filters
 from perfcrawl.crawl.sitemap import collect_sitemap_urls
 from perfcrawl.models import PageResult
 
@@ -101,9 +101,7 @@ def _extract_links(html: str) -> list[str]:
         return []
 
 
-def _sitemap_seeds(
-    seed: str, *, robots: RobotsGate, fetch: Callable[[str], object]
-) -> set[str]:
+def _sitemap_seeds(seed: str, *, robots: RobotsGate, fetch: Callable[[str], object]) -> set[str]:
     """Collect depth-0 sitemap seeds: ``/sitemap.xml`` + robots ``Sitemap:`` dirs.
 
     Soft no-op on anything that does not parse (D-07) — ``collect_sitemap_urls``
@@ -142,6 +140,13 @@ def discover(
     errors: list[PageResult] = []
     variants = VariantCounter(cfg.query_variant_cap)
     delay = robots.effective_delay
+    # WR-04: the login-URL exclusion key is loop-invariant — derive it ONCE here
+    # rather than recomputing canonical_key(cfg.login_url) for every candidate.
+    # Reusing the carried `key` for the candidate side (below) honors the same
+    # WR-06 "compute once / never re-derive" discipline the frontier already uses,
+    # closing the "key diverges from a later re-derived key if canonicalization is
+    # ever non-idempotent" hazard the surrounding comments warn against.
+    login_key = canonical_key(cfg.login_url) if cfg.login_url else None
 
     def _try_admit(url: str, depth: int) -> None:
         """Gate + enqueue a candidate once (IN-05: ONE admission path for all).
@@ -164,6 +169,21 @@ def discover(
         if not in_scope(url, seed, include_subdomains=cfg.include_subdomains):
             return
         if not passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
+            return
+        # D-05 / T-04-04: always-on destructive-link denylist. Placed EARLY (before
+        # robots and the variant cap) so a denied URL never consumes a per-base-path
+        # cap slot — the SAME WR-06 robots-before-cap rationale documented above:
+        # admitting a destructive link to the frontier+cap would crowd out crawlable
+        # siblings, and a /logout/ must be structurally unreachable, not merely
+        # deprioritized. is_denied is fail-CLOSED (garbage -> denied).
+        if is_denied(url, patterns=cfg.deny_patterns):
+            return
+        # AUTH-04 / D-07 / T-04-05: exclude the configured login URL from the audited
+        # set — the login form may echo submitted credentials into a captured
+        # artifact. Done once here, in the single admission path (IN-05), so the
+        # exclusion cannot drift across call sites. WR-04: reuse the already-computed
+        # `key` and the loop-invariant `login_key` rather than re-deriving either.
+        if login_key is not None and key == login_key:
             return
         if not robots.can_fetch(url):
             return

@@ -148,6 +148,113 @@ def test_caps(local_server, client):
     assert len(in_scope0) == 1
 
 
+class _FakeResp:
+    """Minimal duck-typed response: a 200 page whose body is the given HTML."""
+
+    def __init__(self, html: str) -> None:
+        self.status_code = 200
+        self.text = html
+
+
+def _graph_fetch(pages: dict[str, str]):
+    """A fetch over an in-memory page graph (path -> HTML); 404s unknown paths.
+
+    Keyed by URL path so the fixture graph is declared inline — no on-disk fixture
+    mutation. An unmapped path returns a 200 empty page (a leaf), which keeps the
+    admission tests focused on the deny / login-exclusion gates rather than error
+    rows.
+    """
+
+    def fetch(url: str):
+        path = httpx.URL(url).path
+        return _FakeResp(pages.get(path, ""))
+
+    return fetch
+
+
+def test_denylist_blocks_admission():
+    """D-05 / T-04-04: a /logout/ link in the graph is NEVER admitted in-scope.
+
+    The seed page links to a benign /dashboard/ page and a destructive /logout/
+    page. The always-on denylist (DEFAULT_DENY_PATTERNS, default on CrawlConfig)
+    must drop /logout/ at admission so it never enters the in-scope set, while the
+    benign page is still discovered.
+    """
+    seed = "https://www.studyhalo.com/"
+    pages = {
+        "/": '<a href="/dashboard/">Dash</a> <a href="/account/logout/">Logout</a>',
+        "/dashboard/": "<p>dashboard</p>",
+        "/account/logout/": "<p>logged out</p>",
+    }
+    cfg = CrawlConfig(use_sitemap=False)
+    in_scope, _ = discover(
+        seed, cfg=cfg, robots=_allow_all(), fetch=_graph_fetch(pages), sleep=lambda _s: None
+    )
+    found = {r.url for r in in_scope}
+    # the destructive link never enters the in-scope set
+    assert not any("logout" in u for u in found)
+    # the benign sibling is still discovered
+    assert any(u.endswith("/dashboard/") for u in found)
+
+
+def test_user_deny_pattern_blocks_admission():
+    """D-05: a user --deny pattern drops a URL the built-ins would have allowed."""
+    seed = "https://www.studyhalo.com/"
+    pages = {
+        "/": '<a href="/dashboard/">Dash</a> <a href="/billing/">Billing</a>',
+        "/dashboard/": "<p>dashboard</p>",
+        "/billing/": "<p>billing</p>",
+    }
+    # /billing/ is NOT a built-in deny token; a --deny extension must drop it.
+    cfg = CrawlConfig(use_sitemap=False, deny_patterns=[*CrawlConfig().deny_patterns, "billing"])
+    in_scope, _ = discover(
+        seed, cfg=cfg, robots=_allow_all(), fetch=_graph_fetch(pages), sleep=lambda _s: None
+    )
+    found = {r.url for r in in_scope}
+    assert not any("/billing/" in u for u in found)
+    assert any(u.endswith("/dashboard/") for u in found)
+
+
+def test_login_url_excluded():
+    """AUTH-04 / D-07 / T-04-05: the configured login URL is never in the in-scope set.
+
+    Even when the login page is internally linked, it must be excluded once in the
+    single admission path (the login form may echo submitted credentials into a
+    captured artifact). A benign sibling is still discovered.
+    """
+    seed = "https://www.studyhalo.com/"
+    login = "https://www.studyhalo.com/accounts/login/"
+    pages = {
+        "/": '<a href="/dashboard/">Dash</a> <a href="/accounts/login/">Login</a>',
+        "/dashboard/": "<p>dashboard</p>",
+        "/accounts/login/": "<form>login</form>",
+    }
+    cfg = CrawlConfig(use_sitemap=False, login_url=login)
+    in_scope, _ = discover(
+        seed, cfg=cfg, robots=_allow_all(), fetch=_graph_fetch(pages), sleep=lambda _s: None
+    )
+    found = {r.url for r in in_scope}
+    assert not any("/accounts/login/" in u for u in found)
+    assert any(u.endswith("/dashboard/") for u in found)
+
+
+def test_existing_admission_unchanged_for_benign_links(local_server, client):
+    """Regression: non-denied discovery (scope/filter/robots/cap) is unchanged.
+
+    The default-config crawl of the on-disk fixture still discovers index/about/blog
+    exactly as before the deny + login-exclusion gates were added.
+    """
+    cfg = CrawlConfig(use_sitemap=False)
+    seed = local_server + "/index.html"
+    in_scope, _ = discover(
+        seed, cfg=cfg, robots=_allow_all(), fetch=_fetch(client), sleep=lambda _s: None
+    )
+    found = {r.url for r in in_scope}
+    assert any(u.endswith("/index.html") for u in found)
+    assert any(u.endswith("/about.html") for u in found)
+    assert any(u.endswith("/blog.html") for u in found)
+
+
 def test_error_tagging(local_server, client):
     """D-03 / Success #5: the 404 link is a status-only error row, excluded from in-scope."""
     cfg = CrawlConfig(use_sitemap=False)

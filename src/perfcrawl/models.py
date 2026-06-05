@@ -189,6 +189,15 @@ class RunRecord(BaseModel):
     throttling: dict | None = None
     emulation: str | None = None
 
+    # --- Phase 4 (AUTH-03) session-liveness signal ---
+    # The Lighthouse ``finalDisplayedUrl`` of the first successful sample. For an
+    # authenticated audit this MUST end at the requested page (e.g. /dashboard/),
+    # NOT at the login path — a /login/ landing means the session was lost.
+    # Surfaced HERE (a RunRecord field) rather than by extending the
+    # ``(run_record, raw_artifacts)`` return tuple, so the downstream session-loss
+    # check (Plan 03) reads ``run_record.final_displayed_url`` (D-02/D-06).
+    final_displayed_url: str | None = None
+
     pages: list[PageResult] = Field(default_factory=list)
 
     @field_validator("started_at")

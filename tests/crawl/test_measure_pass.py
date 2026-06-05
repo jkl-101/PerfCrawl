@@ -68,20 +68,29 @@ def _in_scope(*urls: str) -> list[InScope]:
     return [InScope(url=u, depth=0, url_key=canonical_key(u)) for u in urls]
 
 
-def _patch_measure(monkeypatch, *, side_effects=None, record=None):
+def _patch_measure(monkeypatch, *, side_effects=None, record=None, landed=None):
     """Patch the measure_url seam; record each call's url; optional per-url errors.
 
     ``side_effects`` maps a url → an Exception instance to raise for that url.
+    ``landed`` maps a url → the ``final_displayed_url`` (and a status_code parsed
+    from it) so a test can simulate a mid-crawl /login/ redirect (session loss).
+    The patched ``fake`` also records the ``auth_state`` it was called with so the
+    auth_state-threading test can assert the value flowed through the pool.
     """
     side_effects = side_effects or {}
+    landed = landed or {}
     if record is None:
         record = []
 
-    def fake(*, url, samples=1, emulation="mobile"):
-        record.append(url)
+    def fake(*, url, samples=1, emulation="mobile", auth_state=None):
+        record.append((url, auth_state))
         if url in side_effects:
             raise side_effects[url]
-        return _canned_run(url)
+        run, artifacts = _canned_run(url)
+        if url in landed:
+            # Simulate a mid-crawl session loss: the audit landed on /login/.
+            run.final_displayed_url = landed[url]
+        return run, artifacts
 
     monkeypatch.setattr("perfcrawl.crawl.measure_pass.measure_url", fake)
     return record
@@ -101,9 +110,7 @@ def test_measure_pass_merges_three_pages(monkeypatch) -> None:
     ]
     _patch_measure(monkeypatch)
     cfg = CrawlConfig()
-    run, merged = measure_pass(
-        _in_scope(*urls), [], cfg=cfg, target="https://example.com/"
-    )
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
     assert len(run.pages) == 3
     assert len(merged) == 3
     keys = {canonical_key(u) for u in urls}
@@ -116,7 +123,8 @@ def test_measure_pass_one_call_per_url(monkeypatch) -> None:
     urls = ["https://example.com/a", "https://example.com/b"]
     record = _patch_measure(monkeypatch)
     measure_pass(_in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/")
-    assert sorted(record) == sorted(urls)
+    called_urls = [u for (u, _auth) in record]
+    assert sorted(called_urls) == sorted(urls)
     assert len(record) == len(urls)
 
 
@@ -132,9 +140,7 @@ def test_measure_pass_pool_size_is_concurrency(monkeypatch) -> None:
     monkeypatch.setattr(ThreadPoolExecutor, "__init__", spy_init)
     _patch_measure(monkeypatch)
     cfg = CrawlConfig(concurrency=5)
-    measure_pass(
-        _in_scope("https://example.com/x"), [], cfg=cfg, target="https://example.com/"
-    )
+    measure_pass(_in_scope("https://example.com/x"), [], cfg=cfg, target="https://example.com/")
     assert captured["max_workers"] == 5
 
 
@@ -149,9 +155,7 @@ def test_measurement_error_tags_one_page(monkeypatch) -> None:
 
     bad = "https://example.com/broken"
     urls = ["https://example.com/ok1", bad, "https://example.com/ok2"]
-    _patch_measure(
-        monkeypatch, side_effects={bad: MeasurementError("all samples failed")}
-    )
+    _patch_measure(monkeypatch, side_effects={bad: MeasurementError("all samples failed")})
     run, merged = measure_pass(
         _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
     )
@@ -178,9 +182,7 @@ def test_unexpected_exception_tags_one_page(monkeypatch) -> None:
     """
     bad = "https://example.com/explode"
     urls = ["https://example.com/ok1", bad, "https://example.com/ok2"]
-    _patch_measure(
-        monkeypatch, side_effects={bad: RuntimeError("chrome went sideways")}
-    )
+    _patch_measure(monkeypatch, side_effects={bad: RuntimeError("chrome went sideways")})
     run, merged = measure_pass(
         _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
     )
@@ -235,6 +237,34 @@ def test_run_metadata_stamped(monkeypatch) -> None:
     assert run.started_at.tzinfo is not None  # tz-aware (D-17)
 
 
+def test_auth_used_true_when_auth_state_passed(monkeypatch) -> None:
+    """WR-05 (D-17): the crawl-level aggregate RunRecord records auth_used=True
+    when an auth_state is threaded into measure_pass."""
+    _patch_measure(monkeypatch)
+    run, _ = measure_pass(
+        _in_scope("https://example.com/p1", "https://example.com/p2"),
+        [],
+        cfg=CrawlConfig(),
+        target="https://example.com/",
+        auth_state={"cookies": [{"name": "sid", "value": "abc"}]},
+    )
+    assert run.auth_used is True
+
+
+def test_auth_used_false_when_no_auth_state(monkeypatch) -> None:
+    """WR-05 (D-17): an unauthenticated crawl records auth_used=False (NOT None),
+    so downstream history/export/regression never see a null auth flag."""
+    _patch_measure(monkeypatch)
+    run, _ = measure_pass(
+        _in_scope("https://example.com/p1", "https://example.com/p2"),
+        [],
+        cfg=CrawlConfig(),
+        target="https://example.com/",
+        # no auth_state passed
+    )
+    assert run.auth_used is False
+
+
 # --------------------------------------------------------------------------- #
 # Aggregate round-trips through the store with no duplicate-url_key ValueError
 # --------------------------------------------------------------------------- #
@@ -248,17 +278,13 @@ def test_aggregate_round_trips_through_store(monkeypatch, tmp_path: Path) -> Non
         "https://example.com/z",
     ]
     _patch_measure(monkeypatch)
-    run, _ = measure_pass(
-        _in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/"
-    )
+    run, _ = measure_pass(_in_scope(*urls), [], cfg=CrawlConfig(), target="https://example.com/")
     db = tmp_path / "perfcrawl.db"
     conn = sqlite3.connect(db)
     try:
         init_db(conn)
         write_run(conn, run)  # must NOT raise ValueError(duplicate url_key)
-        rows = conn.execute(
-            "SELECT id FROM runs WHERE id = ?", (str(run.id),)
-        ).fetchall()
+        rows = conn.execute("SELECT id FROM runs WHERE id = ?", (str(run.id),)).fetchall()
         assert len(rows) == 1
     finally:
         conn.close()
@@ -277,11 +303,126 @@ def test_keyboard_interrupt_partial_flush(monkeypatch) -> None:
     # concurrency=1 makes ordering deterministic: /done completes, then /interrupt
     # raises KeyboardInterrupt, and /never is not reached.
     cfg = CrawlConfig(concurrency=1)
-    run, merged = measure_pass(
-        _in_scope(*urls), [], cfg=cfg, target="https://example.com/"
-    )
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
     # The partial run is returned (reaching this assert is the proof it flushed).
     keys = {p.url_key for p in run.pages}
     assert canonical_key("https://example.com/done") in keys
     # The already-measured page kept its artifact.
     assert canonical_key("https://example.com/done") in merged
+
+
+# --------------------------------------------------------------------------- #
+# AUTH-03: per-page session-loss detection + partial-flush abort
+# --------------------------------------------------------------------------- #
+
+
+def test_session_loss_signal() -> None:
+    """_is_session_loss truth table: /login/ redirect + 401/403 = loss; else not.
+
+    A never-raise pure predicate: a healthy authenticated 200 is NOT a loss, and a
+    None landed_url with an empty login_path is NOT a loss (no false positive on a
+    public crawl where no login path is configured).
+    """
+    from perfcrawl.crawl.measure_pass import _is_session_loss
+
+    # finalDisplayedUrl redirected to the login path → session lost.
+    assert _is_session_loss("https://x/login/", None, "/login/") is True
+    # 401 / 403 status → session lost regardless of where it landed.
+    assert _is_session_loss("https://x/dashboard/", 401, "/login/") is True
+    assert _is_session_loss("https://x/dashboard/", 403, "/login/") is True
+    # Healthy authenticated page (200, landed on the requested page) → NOT a loss.
+    assert _is_session_loss("https://x/dashboard/", 200, "/login/") is False
+    # No login path + no signal → NOT a loss (never-raise, no false positive).
+    assert _is_session_loss(None, None, "") is False
+    # WR-01: a root login_path "/" (bare https://site/ or any root --login-url)
+    # must NOT trip on every page — "/" is a substring of every absolute URL.
+    assert _is_session_loss("https://x/dashboard/", 200, "/") is False
+    assert _is_session_loss("https://x/", 200, "/") is False
+    # WR-01: segment-boundary match — a path that merely CONTAINS the login path
+    # as a substring is NOT a redirect to login. /login-help/ != a /login redirect.
+    assert _is_session_loss("https://x/login-help/", 200, "/login") is False
+    # ...but a true sub-path of the login path (with ?next=) IS a login redirect.
+    assert _is_session_loss("https://x/login/?next=/dashboard/", None, "/login/") is True
+    assert _is_session_loss("https://x/login", None, "/login/") is True
+
+
+def test_session_loss_partial_flush_abort(monkeypatch) -> None:
+    """A mid-crawl session loss flushes already-measured pages and aborts.
+
+    measure_url yields a /login/ landing on the 2nd page (session expired). The
+    1st page must be flushed into the RunRecord; the logged-out 2nd page must NOT
+    be recorded as performance data (AUTH-03); the pass aborts (the 3rd page is
+    never measured).
+    """
+    first = "https://example.com/dash1"
+    lost = "https://example.com/dash2"
+    never = "https://example.com/dash3"
+    urls = [first, lost, never]
+    record = _patch_measure(
+        monkeypatch,
+        landed={lost: "https://example.com/login/?next=/dash2"},
+    )
+    # concurrency=1 makes ordering deterministic: /dash1 measures, then /dash2
+    # lands on /login/ → SessionLost → abort before /dash3.
+    cfg = CrawlConfig(concurrency=1, login_url="https://example.com/login/")
+    run, merged = measure_pass(_in_scope(*urls), [], cfg=cfg, target="https://example.com/")
+    keys = {p.url_key for p in run.pages}
+    # The healthy 1st page is flushed (the work is kept).
+    assert canonical_key(first) in keys
+    assert canonical_key(first) in merged
+    # The logged-out page is NEVER recorded as a measured page.
+    assert canonical_key(lost) not in keys
+    # The pass aborted before reaching the 3rd page.
+    assert canonical_key(never) not in keys
+    called_urls = [u for (u, _auth) in record]
+    assert never not in called_urls
+
+
+def test_auth_state_threaded_into_pool(monkeypatch) -> None:
+    """auth_state is threaded through the worker pool into each measure_url call."""
+    auth_state = {"cookies": [{"name": "sessionid", "value": "abc"}], "origins": []}
+    urls = ["https://example.com/a", "https://example.com/b"]
+    record = _patch_measure(monkeypatch)
+    measure_pass(
+        _in_scope(*urls),
+        [],
+        cfg=CrawlConfig(),
+        target="https://example.com/",
+        auth_state=auth_state,
+    )
+    # Every measure_url call for THIS pass's URLs received the same auth_state
+    # object. (Filter to this test's own URLs: a prior test's pool may leave a
+    # non-daemon worker draining a cancelled future that records under the
+    # re-patched seam — that lingering call carries this test's URLs' siblings,
+    # never one of `urls`, so the filter keeps the assertion deterministic.)
+    seen = [(u, auth) for (u, auth) in record if u in urls]
+    assert seen  # at least one call for this pass happened
+    assert all(auth is auth_state for (_url, auth) in seen)
+
+
+def test_denied_url_not_measured(monkeypatch) -> None:
+    """A denied URL reaching the pass becomes a skip row; measure_url is NOT called.
+
+    Defense-in-depth (D-05 / Pitfall 6 "checked before every fetch"): a destructive
+    URL that slipped past discovery is re-checked at the top of _measure_one and
+    tagged as a skip row instead of being fetched.
+    """
+    denied = "https://example.com/account/logout/"
+    ok = "https://example.com/safe"
+    urls = [denied, ok]
+    record = _patch_measure(monkeypatch)
+    run, merged = measure_pass(
+        _in_scope(*urls),
+        [],
+        cfg=CrawlConfig(),  # DEFAULT_DENY_PATTERNS includes logout
+        target="https://example.com/",
+    )
+    called_urls = [u for (u, _auth) in record]
+    # The denied URL was NEVER passed to measure_url.
+    assert denied not in called_urls
+    assert ok in called_urls
+    # It still appears as a tagged skip row (metrics null), with no artifact.
+    by_key = {p.url_key: p for p in run.pages}
+    assert canonical_key(denied) in by_key
+    assert by_key[canonical_key(denied)].perf_score is None
+    assert canonical_key(denied) not in merged

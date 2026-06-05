@@ -33,6 +33,7 @@ import csv
 import io
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from perfcrawl.models import MetricSample, PageResult, RunRecord
@@ -68,6 +69,11 @@ CSV_COLUMNS: list[str] = [
     "lighthouse_version",    # RunRecord.lighthouse_version
     "emulation",             # RunRecord.emulation
 ]
+
+
+def _identity_scrub(text: str) -> str:
+    """No-op scrubber default (non-auth callers pass nothing to ``write_outputs``)."""
+    return text
 
 
 def _metric_sample_median(ms: MetricSample | None) -> float | None:
@@ -190,6 +196,7 @@ def write_outputs(
     *,
     output_dir: Path,
     raw_artifacts: dict[str, tuple[str, str]] | None = None,
+    scrub: Callable[[str], str] | None = None,
 ) -> Path:
     """Write the per-run artifact tree under ``<output_dir>/<run_id>/``.
 
@@ -208,14 +215,29 @@ def write_outputs(
 
     ``raw_artifacts`` maps a page's ``url_key`` to ``(reportJson, reportHtml)``
     strings. Pages with no entry in the map don't get a ``lighthouse/`` artifact.
+
+    ``scrub`` (D-07 / AUTH-04): an optional credential scrubber applied to the
+    *text* of result.json and result.csv BEFORE each atomic write, so the first
+    and only on-disk copy is already redacted. A credential embedded in a page
+    URL (``https://user:pass@host/``, a redirect target, or a credential-bearing
+    query param echoed into ``slowest_request_url``) is stripped from every
+    text sink this function owns. ``raw_artifacts`` are scrubbed by the caller
+    before they arrive here (they are already-rendered LH report strings).
+    Defaults to identity (no-op) so non-auth callers are unaffected. Scrubbing
+    at write time — rather than re-writing a file that was first written in the
+    clear — is what closes the CR-01 leak and the WR-02 non-atomic-rescrub
+    window in one place: a future fourth text output cannot silently miss the
+    scrubber.
     """
+    if scrub is None:
+        scrub = _identity_scrub
     run_dir = Path(output_dir) / str(run_record.id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- result.json: full-fidelity, atomic ---
+    # --- result.json: full-fidelity, atomic, scrubbed ---
     _atomic_write_text(
         run_dir / "result.json",
-        run_record.model_dump_json(indent=2),
+        scrub(run_record.model_dump_json(indent=2)),
     )
 
     # --- result.csv: locked column order, atomic ---
@@ -239,7 +261,12 @@ def write_outputs(
     for page in run_record.pages:
         writer.writerow(_build_csv_row(run_record, page))
     csv_content = buf.getvalue().replace("\r\n", "\n")
-    _atomic_write_text(run_dir / "result.csv", csv_content)
+    # CR-01 / AUTH-04: scrub the CSV at the SAME boundary as result.json. The
+    # CSV emits ``page.url`` and ``page.slowest_request_url`` straight from the
+    # as-measured PageResult; either can carry an embedded credential. Scrubbing
+    # the rendered CSV text before the atomic write keeps the first and only
+    # on-disk copy redacted.
+    _atomic_write_text(run_dir / "result.csv", scrub(csv_content))
 
     # --- lighthouse/<slug>.{json,html} ---
     if raw_artifacts:

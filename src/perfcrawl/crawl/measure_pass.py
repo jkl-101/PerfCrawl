@@ -50,7 +50,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 from uuid import uuid4
+
+from rich.console import Console
 
 from perfcrawl.constants import (
     BACKOFF_BASE_S,
@@ -59,8 +62,27 @@ from perfcrawl.constants import (
 from perfcrawl.crawl import is_error_row
 from perfcrawl.crawl.config import CrawlConfig
 from perfcrawl.crawl.discovery import InScope
+from perfcrawl.crawl.scope import is_denied
 from perfcrawl.models import PageResult, RunRecord
 from perfcrawl.orchestrator import MeasurementError, measure_url
+
+# Stderr console for the loud session-loss abort report (D-06). measure_pass is a
+# library module, so it owns its own stderr Console rather than importing cli.py's
+# (which would be a layering cycle: cli imports measure_pass, not the reverse).
+_err_console = Console(stderr=True)
+
+
+class SessionLost(Exception):
+    """AUTH-03: an authenticated audit landed logged-out mid-crawl.
+
+    Raised by ``_measure_one`` when ``_is_session_loss`` fires (a redirect to the
+    login path, or a 401/403 status). It propagates the SAME way ``KeyboardInterrupt``
+    does — out of the worker and up into ``measure_pass``'s abort handler, which
+    flushes the already-measured authenticated pages as a tagged-partial run and
+    stops. A logged-out page is NEVER recorded as performance data. The CLI maps the
+    resulting partial run to ``ExitCode.AUTH_ERROR`` (D-06).
+    """
+
 
 # Retryable transient signals a target can surface under load. ``measure_url``
 # does not currently classify these, but if a future revision raises a
@@ -117,8 +139,64 @@ def _error_row(url: str, url_key: str) -> PageResult:
     return PageResult(url=url, url_key=url_key)
 
 
+def _is_session_loss(landed_url: str | None, status: int | None, login_path: str) -> bool:
+    """True iff an authenticated audit landed logged-out (AUTH-03). Never raises.
+
+    Two spike-proven signals, either of which means the session was lost mid-crawl:
+
+      - a 401/403 status on the audited page, OR
+      - the Lighthouse ``finalDisplayedUrl`` redirected to the login path — the
+        audit followed an auth redirect back to /login/ instead of rendering the
+        requested page.
+
+    WR-05 reachability caveat: this predicate is only consulted on the SUCCESS
+    path of ``_measure_one`` (after ``measure_url`` returned a usable RunRecord).
+    If a 401/403 wall yields NO usable Lighthouse result, ``measure_url`` raises
+    ``MeasurementError`` and this predicate is never reached for that page — the
+    401/403 signal is therefore effective only when the error page STILL produced
+    an LHR exposing its ``status_code``. The redirect-to-login signal is the
+    reliable detector; do not overstate the 401/403 path as a complete guarantee.
+
+    Never-raise / no false positive: with no ``login_path`` configured (a public
+    crawl) and no error status, this returns ``False`` — a public page is never a
+    "session loss". A ``None`` landed URL is guarded so a missing/garbage signal
+    can never crash or false-trip (T-04-09 / V5).
+
+    WR-01: the login-redirect signal compares the landed URL's *parsed path* on a
+    segment boundary, NOT a raw substring. The old ``login_path in landed_url``
+    test false-tripped on a degenerate ``login_path`` of ``"/"`` (the path of a
+    bare ``https://site/`` or any root ``--login-url``), because ``"/"`` is a
+    substring of essentially every absolute URL — every authenticated page was
+    flagged as a session loss and the crawl aborted on page 1. A root
+    ``login_path`` ("/" or empty) is therefore treated as "no usable login path"
+    and never trips; a non-root path matches only on an exact path or a true
+    sub-path (``/login`` matches ``/login`` and ``/login/?next=…`` but NOT
+    ``/login-help/``).
+    """
+    if status in (401, 403):
+        return True
+    if not login_path or login_path == "/":
+        return False
+    try:
+        landed_path = urlsplit(landed_url or "").path
+    except Exception:
+        return False
+    prefix = login_path.rstrip("/")
+    return (
+        landed_path == login_path
+        or landed_path == prefix
+        or landed_path.startswith(prefix + "/")
+    )
+
+
 def _measure_one(
-    url: str, url_key: str, *, cfg: CrawlConfig, gate: _PolitenessGate
+    url: str,
+    url_key: str,
+    *,
+    cfg: CrawlConfig,
+    gate: _PolitenessGate,
+    auth_state: dict | None = None,
+    login_path: str = "",
 ) -> tuple[PageResult, tuple[str, str] | None, RunRecord | None]:
     """Measure one URL via the unchanged ``measure_url`` seam.
 
@@ -129,13 +207,30 @@ def _measure_one(
 
     Retryable transients (429/503) are retried with exponential backoff up to
     ``BACKOFF_MAX_RETRIES`` before the URL is finally tagged-and-abandoned (D-12).
+
+    ``auth_state`` (D-02) is threaded straight into ``measure_url`` so an
+    authenticated crawl replays the resolved session in every worker — the pool
+    stays concurrent for authenticated runs. ``login_path`` feeds the per-page
+    session-loss check (AUTH-03): after a successful audit, if the landed URL
+    redirected to the login path (or the status is 401/403) this raises
+    ``SessionLost`` rather than returning a logged-out page.
     """
+    # Pitfall 6 deny re-check (D-05 defense-in-depth — "checked before every
+    # fetch"): a destructive URL that slipped past discovery's admission gate is
+    # tagged as a skip row and NEVER fetched. is_denied is the same fail-CLOSED
+    # predicate the discovery gate uses, re-applied here at the last moment.
+    if is_denied(url, patterns=cfg.deny_patterns):
+        return _error_row(url, url_key), None, None
+
     attempt = 0
     while True:
         gate.wait()
         try:
             run, artifacts = measure_url(
-                url=url, samples=cfg.samples, emulation=cfg.emulation
+                url=url,
+                samples=cfg.samples,
+                emulation=cfg.emulation,
+                auth_state=auth_state,
             )
         except MeasurementError as exc:
             if _is_retryable(exc) and attempt < BACKOFF_MAX_RETRIES:
@@ -143,10 +238,26 @@ def _measure_one(
                 attempt += 1
                 continue
             # All samples failed / non-retryable: tag-and-move-on (D-03).
+            #
+            # WR-05 LIMITATION (AUTH-03 scope, not overstated): a session that
+            # expired into a 401/403 wall may yield NO usable Lighthouse result,
+            # in which case measure_url raises MeasurementError("all N samples
+            # failed") and we land HERE — converting the auth failure to a generic
+            # error row. The 401/403 branch of _is_session_loss is only reached on
+            # the SUCCESS path below, i.e. only when the error page STILL produced
+            # an LHR carrying its status_code. So an auth-status session loss whose
+            # error page produces no LHR is recorded as a measurement error and does
+            # NOT trigger the AUTH-03 abort + AUTH_ERROR exit. The redirect-to-login
+            # signal (finalDisplayedUrl → login_path) remains the reliable detector;
+            # the 401/403 status signal is best-effort, contingent on a measurable
+            # error page. (A full fix would thread the audited final status out of
+            # the orchestrator even when metrics are unusable — deferred to avoid
+            # disturbing the never-raise / (run, merged) measure_url contract.)
             return _error_row(url, url_key), None, None
-        except KeyboardInterrupt:
-            # Let measure_pass's partial-flush handler catch it (Pitfall 8) — a
-            # Ctrl-C is a crawl-level signal, never a per-page error row.
+        except (KeyboardInterrupt, SessionLost):
+            # Let measure_pass's partial-flush handler catch these (Pitfall 8 /
+            # D-06) — a Ctrl-C OR a mid-crawl session loss is a crawl-level abort
+            # signal, never a per-page error row.
             raise
         except Exception:
             # CR-01: ANY other per-page failure (a non-MeasurementError raised by
@@ -160,6 +271,17 @@ def _measure_one(
             return _error_row(url, url_key), None, None
         # measure_url returns a one-page RunRecord; lift its single PageResult.
         page = run.pages[0] if run.pages else _error_row(url, url_key)
+        # AUTH-03 (D-06): on a session loss, raise SessionLost BEFORE returning this
+        # page so it is never recorded as authenticated performance data. The landed
+        # URL is the Lighthouse finalDisplayedUrl (RunRecord.final_displayed_url,
+        # surfaced by Plan 01 — a run-metadata field, NOT a return-tuple element);
+        # the status is the audited page's status_code. Propagates like Ctrl-C
+        # (re-raised above) up to measure_pass's abort handler.
+        if _is_session_loss(run.final_displayed_url, page.status_code, login_path):
+            raise SessionLost(
+                f"session lost auditing {url}: landed on "
+                f"{run.final_displayed_url!r} (status {page.status_code})"
+            )
         artifact = artifacts.get(page.url_key)
         return page, artifact, run
 
@@ -177,6 +299,8 @@ def measure_pass(
     cfg: CrawlConfig,
     target: str,
     min_delay_s: float | None = None,
+    auth_state: dict | None = None,
+    abort_state: dict | None = None,
 ) -> tuple[RunRecord, dict[str, tuple[str, str]]]:
     """Measure every in-scope URL via a bounded pool of ``measure_url`` calls.
 
@@ -193,19 +317,40 @@ def measure_pass(
     measurement pass — the phase that generates the real Lighthouse load. When
     ``None`` the gate falls back to ``cfg.min_delay_s`` alone.
 
+    ``auth_state`` (D-02): the resolved Playwright ``storage_state`` for an
+    authenticated crawl. Threaded into every worker's ``measure_url`` call so the
+    session replays on each independent Chrome (the pool stays concurrent for
+    authenticated runs). ``None`` for a public crawl.
+
+    ``abort_state`` (AUTH-03 / D-06 CLI signal): an optional mutable dict the
+    caller passes to learn WHY the pass ended. The ``(run_record, merged)`` return
+    contract is unchanged (existing call sites + tests keep their 2-tuple unpack),
+    so a SessionLost abort is otherwise indistinguishable from a clean partial run.
+    When a mid-crawl session loss aborts the pass, ``abort_state["session_lost"]``
+    is set to ``True`` — the CLI reads it to map the tagged-partial run to
+    ``ExitCode.AUTH_ERROR`` (3). A plain Ctrl-C or a clean full pass leaves it unset.
+
     Provably terminates: the in-scope list is already bounded by discovery's
-    caps; the pool drains it once. On ``KeyboardInterrupt`` the already-collected
-    pages are flushed as a valid tagged-partial run (Pitfall 8).
+    caps; the pool drains it once. On ``KeyboardInterrupt`` OR ``SessionLost``
+    (AUTH-03 mid-crawl session loss) the already-collected pages are flushed as a
+    valid tagged-partial run (Pitfall 8 / D-06) — a logged-out page is never
+    recorded.
     """
-    delay = (
-        cfg.min_delay_s
-        if min_delay_s is None
-        else max(cfg.min_delay_s, min_delay_s)
-    )
+    delay = cfg.min_delay_s if min_delay_s is None else max(cfg.min_delay_s, min_delay_s)
     gate = _PolitenessGate(delay)
     measured: list[PageResult] = []
     merged: dict[str, tuple[str, str]] = {}
     first_run: RunRecord | None = None
+
+    # AUTH-03: the login path the session-loss check compares finalDisplayedUrl
+    # against. Derived once from cfg.login_url (path component only, so a redirect
+    # to /login/?next=… still matches). Empty for a public crawl → never a loss.
+    login_path = ""
+    if cfg.login_url:
+        try:
+            login_path = urlsplit(cfg.login_url).path or ""
+        except Exception:
+            login_path = ""
 
     # Pool size == per-host concurrency == Chrome-pool size (D-09). Each future
     # is an independent measure_url call (its own Chrome/port/tempdir — A6).
@@ -214,7 +359,15 @@ def measure_pass(
         # Lazily iterate map() so a KeyboardInterrupt during the pass still yields
         # every page produced up to the interrupt (Pitfall 8 partial-flush).
         results = executor.map(
-            lambda u: _measure_one(u.url, u.url_key, cfg=cfg, gate=gate), in_scope
+            lambda u: _measure_one(
+                u.url,
+                u.url_key,
+                cfg=cfg,
+                gate=gate,
+                auth_state=auth_state,
+                login_path=login_path,
+            ),
+            in_scope,
         )
         for page, artifact, run in results:
             measured.append(page)
@@ -222,10 +375,26 @@ def measure_pass(
                 merged[page.url_key] = artifact
             if first_run is None and run is not None:
                 first_run = run
-    except KeyboardInterrupt:
-        # Pitfall 8: flush what we have. Cancel any still-queued futures so we
-        # don't block on the full in-scope list during interpreter teardown.
+    except (KeyboardInterrupt, SessionLost) as abort:
+        # Pitfall 8 / D-06: flush what we have. A Ctrl-C OR a mid-crawl session
+        # loss (AUTH-03) aborts the pass; the already-measured authenticated pages
+        # are kept as a tagged-partial run, but no logged-out page is recorded.
+        # Cancel any still-queued futures so we don't block on the full in-scope
+        # list during teardown.
         executor.shutdown(wait=False, cancel_futures=True)
+        if isinstance(abort, SessionLost):
+            # D-06: report the session loss LOUDLY to stderr (the Ctrl-C path is
+            # silent — the user already knows they pressed Ctrl-C).
+            _err_console.print(
+                "[red]session lost mid-crawl — aborting; "
+                "already-measured pages kept, no logged-out page recorded[/red]"
+            )
+            # AUTH-03 CLI signal: flag the out-parameter so the CLI maps this
+            # tagged-partial run to ExitCode.AUTH_ERROR (3), not a clean exit 0.
+            # The Ctrl-C branch deliberately leaves it unset (Ctrl-C is exit 0
+            # partial, not an auth failure).
+            if abort_state is not None:
+                abort_state["session_lost"] = True
     finally:
         # WR-04: cancel still-queued futures and return the partial run promptly
         # (wait=False). NOTE: ThreadPoolExecutor workers are NON-daemon, so any
@@ -260,6 +429,15 @@ def measure_pass(
         id=uuid4(),
         started_at=datetime.now(UTC),
         target=target,
+        # WR-05 (D-17): stamp the crawl-level auth flag. The single-URL path sets
+        # this on its RunRecord (orchestrator.measure_url), but the crawl path
+        # built its aggregate RunRecord here and omitted the field, so it
+        # defaulted to None — every `perfcrawl crawl` run, authenticated or not,
+        # persisted/exported auth_used=None. measure_pass already receives
+        # auth_state, so the information is in hand; propagate it so SQLite
+        # history, CSV/JSON export, and future regression self-joins get correct
+        # run metadata.
+        auth_used=auth_state is not None,
         chrome_version=first_run.chrome_version if first_run else None,
         lighthouse_version=first_run.lighthouse_version if first_run else None,
         throttling=first_run.throttling if first_run else None,

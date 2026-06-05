@@ -75,16 +75,23 @@ ALWAYS_INCLUDE_AUDITS: frozenset[str] = frozenset({"interactive"})
 
 # --- D-15: exit codes (the ONE editable place) ------------------------------
 class ExitCode(IntEnum):
-    """D-15: 0 success / 1 user error / 2 measurement error.
+    """D-15: 0 success / 1 user error / 2 measurement error / 3 auth error.
 
-    Phase 6 budget verdicts (BUDG-01) will carve out 10+; the gap is intentional.
-    Callers can ``case $? in 0) parse JSON ;; 1) fix invocation ;; 2) investigate
-    environment ;; esac``.
+    Phase 4 adds ``AUTH_ERROR = 3`` (the "auth band"). Phase 6 budget verdicts
+    (BUDG-01) will carve out 10+; the gap above 3 is intentional. Callers can
+    ``case $? in 0) parse JSON ;; 1) fix invocation ;; 2) investigate
+    environment ;; 3) re-auth ;; esac``.
     """
 
     SUCCESS = 0  # page measured (including non-2xx — D-13 partial)
     USER_ERROR = 1  # bad URL, bad flags, can't write output dir, Typer usage error
     MEASUREMENT_ERROR = 2  # all N samples failed, Chrome won't launch, etc.
+    # Phase 4 (D-15 / RESEARCH A2): the "auth band". A distinct code (not a reuse
+    # of 2) so `case $? in 3) re-auth ;; esac` scripting can tell a session/login
+    # problem (login can't be confirmed, stale --auth-state, mid-crawl session
+    # loss) apart from Chrome/LH breakage. The gap after 2 (constants.py:18-20
+    # docstring) was reserved precisely for this; Phase 6 BUDG-01 still carves 10+.
+    AUTH_ERROR = 3
 
 
 # --- Phase 3 crawl defaults (D-08 / D-09 / D-10 / D-12) ---------------------
@@ -124,3 +131,49 @@ SITEMAP_MAX_RECURSION_DEPTH: int = 5  # Pitfall 7 sitemap-trap bound
 
 # The User-Agent the discovery pass and robots-matching identify as.
 CRAWLER_USER_AGENT: str = "PerfCrawl/0.1 (+https://github.com/jkl-101/PerfCrawl)"
+
+
+# --- Phase 4 auth constants (D-01 / D-05 / D-07) ----------------------------
+# The ONE editable place for every Phase-4 auth literal. `auth.py`, the CLI
+# credential intake, the redaction sinks, and `CrawlConfig`'s deny field all
+# import from HERE — never inline a deny token, an env-var name, the redaction
+# placeholder, or the login-wait timeout. Phase 1 grep-asserts this discipline
+# for TRACKING_PARAM_DENYLIST; Phase 4 extends it to these.
+
+# D-05: always-on destructive-link denylist (substring, case-insensitive).
+# Bias toward session-ending + state-mutating path tokens; `--deny`-extensible.
+# NOTE: `admin` is deliberately broad (it denies `/admin-guide/` too); CONTEXT
+# explicitly named it for the locked safety set, so it stays. There is no
+# `--allow` un-deny in v1 (RESEARCH Open Q3) — acceptable for a safety denylist.
+DEFAULT_DENY_PATTERNS: frozenset[str] = frozenset(
+    {
+        "logout",
+        "log-out",
+        "signout",
+        "sign-out",  # session-ending
+        "delete",
+        "destroy",
+        "remove",  # destructive
+        "admin",  # admin actions (CONTEXT-named; broad on purpose)
+        "archive",
+        "trash",  # soft-destructive
+        "unsubscribe",
+        "deactivate",
+        "disable",  # account-state mutations
+    }
+)
+
+# D-07: credential intake is env-only (NEVER a Typer Option — argv is visible in
+# `ps` / shell history). These name the env vars `auth.py`/CLI read creds from.
+PERFCRAWL_USERNAME_ENV: str = "PERFCRAWL_USERNAME"
+PERFCRAWL_PASSWORD_ENV: str = "PERFCRAWL_PASSWORD"
+
+# D-07: the single redaction placeholder. The scrubber (auth.make_scrubber) and
+# every sink that prints/persists auth-adjacent text substitute real secret
+# values with this token. Defined once so the literal never drifts across sinks.
+REDACTION_PLACEHOLDER: str = "***REDACTED***"
+
+# D-01 (Claude's discretion): how long the driven form login waits for the
+# post-submit load before evaluating the success heuristic. Playwright takes
+# milliseconds; this is the explicit upper bound passed to wait_for_load_state.
+LOGIN_WAIT_TIMEOUT_MS: int = 15_000
