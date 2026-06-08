@@ -177,3 +177,48 @@ REDACTION_PLACEHOLDER: str = "***REDACTED***"
 # post-submit load before evaluating the success heuristic. Playwright takes
 # milliseconds; this is the explicit upper bound passed to wait_for_load_state.
 LOGIN_WAIT_TIMEOUT_MS: int = 15_000
+
+
+# --- Phase 5 AI analysis constants (D-07/D-08/D-03/D-11) --------------------
+# The ONE editable place for every Phase-5 AI literal. `analysis.py` and the CLI
+# `--ai`/`--ai-model` flags import from HERE — never inline a model id, pool cap,
+# retry count, token bound, timeout, the waterfall-N, or the env-var name.
+# Phase 1 grep-asserts this discipline for TRACKING_PARAM_DENYLIST; Phase 5
+# extends it to these.
+
+# D-07: bulk default model — Sonnet is the cost-appropriate synthesis tier and a
+# T-05-cost guard (NOT Opus by default). Override per-run via `--ai-model`.
+DEFAULT_AI_MODEL: str = "claude-sonnet-4-6"
+
+# D-07/D-08: the escalation tier reached via `--ai-model claude-opus-4-8` for
+# small high-value crawls. MUST be 4-8 — `claude-opus-4-7` is superseded and is
+# the value the older CLAUDE.md/AI-SPEC notes carried; never copy it forward.
+AI_OPUS_MODEL: str = "claude-opus-4-8"
+
+# D-03: analyze-pool worker cap. Network-bound, so intentionally DECOUPLED from
+# DEFAULT_CONCURRENCY (the Chrome pool, one heavyweight browser per worker).
+AI_POOL_SIZE: int = 4
+
+# D-11: SDK `max_retries` (its own default is 2). Set HERE so the retry budget is
+# the one editable place; the SDK does the exponential backoff (no hand-rolled loop).
+AI_MAX_RETRIES: int = 2
+
+# AI-SPEC §4: per-call output bound (three short fields) + a T-05-cost runaway guard.
+AI_MAX_TOKENS: int = 600
+
+# AI-SPEC §4: per-client request timeout, below the SDK's 10-min default so a hung
+# call degrades a page promptly instead of stalling the analyze pool.
+AI_REQUEST_TIMEOUT_S: float = 60.0
+
+# D-04: cap the per-page digest waterfall at the top-N slowest entries (sorted by
+# timing desc, tie-break url asc) so the cached prompt stays small + deterministic.
+AI_WATERFALL_TOP_N: int = 5
+
+# D-10: the env var the API key is read from. Credential intake is env-only — the
+# key is NEVER a Typer Option (argv is visible in `ps`/shell history).
+ANTHROPIC_API_KEY_ENV: str = "ANTHROPIC_API_KEY"
+
+# D-10 / ExitCode decision (RESEARCH A2): the missing-key fail-fast REUSES the
+# existing `ExitCode.USER_ERROR = 1` (its docstring already covers "bad flags") —
+# NO new ExitCode member is added. A missing key on `--ai` is a user-invocation
+# error, not a measurement/auth failure; `case $? in 1) fix invocation ;; esac`.
