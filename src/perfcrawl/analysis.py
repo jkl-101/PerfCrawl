@@ -38,40 +38,224 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 
-from perfcrawl.constants import DEFAULT_AI_MODEL
+from perfcrawl.constants import (
+    AI_WATERFALL_TOP_N,
+    DEFAULT_AI_MODEL,
+)
 from perfcrawl.models import AnalysisResult, PageResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import for annotations
     import anthropic
 
-    from perfcrawl.models import RunRecord
+    from perfcrawl.models import RunRecord, WaterfallEntry
 
 # Module-owned stderr console (mirrors measure_pass.py:69-72). A library module
 # never imports cli.py's console — that would be a layering cycle.
 _err_console = Console(stderr=True)
 
-# --- The frozen cite-the-numbers rubric (Plan 02 writes the real prose) ------
-# Plan 02 replaces this placeholder with the real ≥1,024-token frozen system
-# prefix (metric glossary + the 0-100-higher-is-better scale + the labeled-INP-
-# proxy rule + the "insufficient data over speculation" rule + worked examples).
-# It MUST stay a byte-stable module constant so the prompt-cache prefix hits
-# (AI-SPEC Pitfall 1/2). The empty placeholder here makes ``test_rubric_frozen``
-# fail RED until Plan 02 lands the real rubric — the intended Wave-0 outcome.
-RUBRIC: str = ""
+# --- The frozen cite-the-numbers rubric (D-05 / D-15) ------------------------
+# A byte-stable module constant: the STATIC system prefix sent on every call with
+# ``cache_control: ephemeral`` so the prompt cache hits (AI-SPEC Pitfall 1/2). It
+# MUST clear the ~1,024-token Sonnet-4.6 / Opus-4.8 cache minimum, so it is bulked
+# with a metric glossary, the explicit 0-100-higher-is-better scale, the labeled-
+# INP-proxy rule, the CWV bands, the "insufficient data over speculation" rule,
+# and two worked examples. Never interpolate per-page data here — the variable
+# digest goes in ``messages``, NEVER in this prefix (would drift the cache).
+RUBRIC: str = """\
+You are a web-performance analyst. You will be given a DIGEST of ONE web page's
+measured performance metrics. Your job is to write three short, plain-language
+fields about THAT page, grounded ONLY in the numbers present in the digest:
+
+  - observation: what the numbers say about this page's performance.
+  - potential_cause: the most likely mechanism, tied to a SPECIFIC metric/value
+    that appears in the digest.
+  - suggested_optimization: one concrete, evidence-backed thing to try.
+
+ABSOLUTE GROUNDING RULES (these are the contract; violating them makes the note
+worse than useless because it erodes trust in every other row):
+
+1. CITE THE NUMBERS. Every quantitative claim MUST cite a metric that is present
+   in the digest AND its exact value as shown. Never state a number that does not
+   appear in the digest. If you want to mention a value, copy it from the digest.
+
+2. NEVER GUESS THE STACK. Do NOT name or assert any framework, library, server,
+   CDN, third-party script, or specific render-blocking resource UNLESS that exact
+   string already appears in the digest evidence (for example, as a waterfall
+   request URL). The digest carries metric numbers and request URLs only — it
+   never carries the page's HTML, its framework, or its server software. So you
+   cannot know them. Do NOT say "React", "Vue", "Angular", "Django", "Rails",
+   "nginx", "Apache", "your CDN", "Cloudflare", "WordPress", "jQuery", "webpack",
+   "Google Tag Manager", or any other named technology unless the digest text
+   literally contains that token. This is the single most important rule and the
+   project's #1 failure mode: a plausible-but-fabricated cause ("React hydration
+   is slow", "nginx is misconfigured") sends an engineer chasing a phantom.
+
+3. PREFER "INSUFFICIENT DATA" OVER SPECULATION. If a metric needed to support a
+   claim is shown as "n/a" (missing) in the digest, say the data is insufficient
+   to determine that cause. An honest "insufficient data to identify the cause"
+   is ALWAYS better than confidently-wrong prose. Do not fill a gap with a
+   plausible-sounding guess.
+
+4. NO BARE INP. The digest reports TBT (Total Blocking Time) as the LAB PROXY for
+   INP. TBT is measured in a headless lab pass; it is NOT a real field INP value.
+   Never write "INP is N ms" or otherwise assert a real field-INP number. If you
+   refer to interactivity, say "TBT (the lab proxy for INP) is N ms" and make
+   clear real field INP was not measured.
+
+THE SCORE SCALE. The four category scores (Performance, Accessibility, SEO,
+Best-practices) are on a 0-100 scale where HIGHER IS BETTER. A score of 98 is
+excellent; a score near 100 is essentially perfect. Do NOT treat a score like 98
+as "98 ms" or as a near-zero ratio, and do NOT invent a problem on a page whose
+scores are all high. A score of 90 or above is good; 50-89 is mixed; below 50 is
+poor. If every score is >= 90 and the Core Web Vitals are in the good band, the
+correct observation is that the page is healthy — say so plainly.
+
+METRIC GLOSSARY (what each digest line means):
+
+  - URL: the page measured. CONTEXT ONLY. You may NOT infer the technology stack,
+    framework, or server from the URL or from any request path. The URL is not
+    evidence of a cause.
+  - HTTP status: the page's response status code (200 is a normal success).
+  - Performance / Accessibility / SEO / Best-practices score: Lighthouse category
+    scores, 0-100, higher is better (see the score scale above).
+  - LCP (ms): Largest Contentful Paint in milliseconds. Core Web Vital. Band:
+    GOOD <= 2500 ms, needs-improvement 2500-4000 ms, POOR > 4000 ms. Lower is
+    better. LCP is usually bound by the largest above-the-fold element (often the
+    hero image or a large block of text) and by how long the server and render
+    path take to deliver it.
+  - CLS: Cumulative Layout Shift, a unitless score. Core Web Vital. Band: GOOD
+    <= 0.1, needs-improvement 0.1-0.25, POOR > 0.25. Lower is better. CLS is
+    caused by content that moves after it first paints (images/ads/fonts without
+    reserved space).
+  - TBT (ms, lab proxy for INP): Total Blocking Time in milliseconds, the LAB
+    PROXY for INP (see rule 4). Lower is better; high TBT means long main-thread
+    tasks (usually heavy JavaScript) blocking interactivity. NEVER call this INP.
+  - TTFB (ms): Time To First Byte in milliseconds. Lower is better. High TTFB
+    points at slow server response, slow upstream, or redirects — server-side,
+    not front-end.
+  - Request count: number of network requests the page made. More requests means
+    more connection/parse overhead.
+  - Total bytes: total transferred bytes for the page. Large total bytes (driven
+    by big images, fonts, or JS/CSS bundles) slows load on constrained networks.
+  - Slowest request: the single slowest network request URL and its time in ms —
+    often the most actionable single fact on the page.
+  - Top requests: the slowest requests by timing, each with its URL, resource
+    type, transferred size in bytes, timing in ms, and status code.
+
+HOW TO REASON ABOUT A CAUSE. Connect a NAMED, PRESENT metric to a plausible
+mechanism using only the evidence. Good: "LCP is 4800 ms (poor); the slowest
+request is the 2.4 MB hero image at 1820 ms, which is the likely LCP element."
+That cites real digest values and names a real digest request. Bad: "LCP is slow
+because of React hydration" — the digest never mentions React, so this is a
+fabricated cause (rule 2).
+
+WORKED EXAMPLE A — healthy page (do not invent a problem):
+  Digest says all four scores are 90+ (e.g. Performance 98), LCP 1200 ms (good),
+  CLS 0.02 (good), TBT 90 ms (low). Correct observation: "This page is healthy —
+  Performance score 98/100, LCP 1200 ms and CLS 0.02 are both in the good band,
+  and TBT (the lab proxy for INP) is a low 90 ms." Correct cause: "No performance
+  problem is evident from the captured metrics." Correct optimization: "No action
+  needed; the page already meets the Core Web Vitals good thresholds."
+
+WORKED EXAMPLE B — insufficient data (be honest about gaps):
+  Digest shows LCP as "n/a", TTFB 220 ms, CLS 0.06, and the rest present. Correct
+  observation: "TTFB is a healthy 220 ms and CLS 0.06 is in the good band, but LCP
+  was not captured (n/a) for this page." Correct cause: "Insufficient data to
+  determine the loading bottleneck — LCP, the key paint metric, is missing for
+  this page." Correct optimization: "Re-measure to capture LCP before drawing a
+  loading-performance conclusion."
+
+Stay terse. Each field is one to three sentences. Cite the digest's own numbers.
+When in doubt, say less and stay grounded.
+"""
+
+
+_NA = "n/a"
+
+
+def _fmt_plain(v: int | None) -> str:
+    """Render an int (or ``None`` → ``n/a``) deterministically."""
+    return _NA if v is None else str(v)
+
+
+def _fmt_int_val(v: float | None) -> str:
+    """Render a float as fixed-precision integer ms (or ``n/a``)."""
+    return _NA if v is None else str(int(round(v)))
+
+
+def _fmt_median_ms(sample) -> str:
+    """Render a ``MetricSample.median`` as integer ms (or ``n/a``)."""
+    if sample is None or sample.median is None:
+        return _NA
+    return str(int(round(sample.median)))
+
+
+def _fmt_cls(sample) -> str:
+    """Render a CLS ``MetricSample.median`` at a fixed 3 dp (or ``n/a``)."""
+    if sample is None or sample.median is None:
+        return _NA
+    return f"{sample.median:.3f}"
+
+
+def _fmt_score(v: float | None) -> str:
+    """Render a 0-100 category score with no trailing-zero drift (or ``n/a``)."""
+    if v is None:
+        return _NA
+    if float(v).is_integer():
+        return str(int(v))
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def _sorted_waterfall(entries: list[WaterfallEntry]) -> list[WaterfallEntry]:
+    """Sort waterfall rows by ``timing_ms`` desc, tie-break ``url`` asc (deterministic)."""
+    return sorted(entries, key=lambda e: (-(e.timing_ms or 0.0), e.url or ""))
 
 
 def build_digest(page: PageResult) -> str:
     """Render ``page`` into the deterministic, sorted, timestamp-free digest text.
 
-    CONTRACT (Plan 02 implements): selected ``PageResult`` fields only — url,
-    status, the four 0-100 category scores, LCP/CLS/TBT(labeled INP proxy)/TTFB
-    medians, request count, total bytes, slowest request, and the top-N slowest
-    waterfall rows (``AI_WATERFALL_TOP_N``, sorted by timing desc / url asc).
-    Nulls render as an explicit ``n/a``; floats round to fixed precision; NO
-    ``datetime``/UUID/run-id — so the same page yields byte-identical text every
-    call (and a reordered waterfall renders identically).
+    Selected ``PageResult`` fields only — url, status, the four 0-100 category
+    scores, LCP/CLS/TBT(labeled INP proxy)/TTFB medians, request count, total
+    bytes, slowest request, and the top-``AI_WATERFALL_TOP_N`` slowest waterfall
+    rows (sorted by timing desc / url asc). ``url_key``, ``diagnostics``, the full
+    waterfall, and the per-metric ``samples`` are excluded. Nulls render as an
+    explicit ``n/a``; floats round to fixed precision; NO ``datetime``/UUID/run-id
+    — so the same page yields byte-identical text every call (and a reordered
+    waterfall renders identically).
     """
-    raise NotImplementedError("build_digest is a Wave-0 contract stub; Plan 02 implements it.")
+    lines = [
+        f"URL: {page.url}",
+        f"HTTP status: {_fmt_plain(page.status_code)}",
+        f"Performance score (0-100, higher is better): {_fmt_score(page.perf_score)}",
+        f"Accessibility score (0-100, higher is better): {_fmt_score(page.a11y_score)}",
+        f"SEO score (0-100, higher is better): {_fmt_score(page.seo_score)}",
+        f"Best-practices score (0-100, higher is better): {_fmt_score(page.best_practices_score)}",
+        f"LCP (ms): {_fmt_median_ms(page.lcp_ms)}",
+        f"CLS: {_fmt_cls(page.cls)}",
+        (
+            "TBT (ms, lab proxy for INP — not real field INP): "
+            f"{_fmt_median_ms(page.inp_proxy_tbt_ms)}"
+        ),
+        f"TTFB (ms): {_fmt_median_ms(page.ttfb_ms)}",
+        f"Request count: {_fmt_plain(page.request_count)}",
+        f"Total bytes: {_fmt_plain(page.total_bytes)}",
+        (
+            f"Slowest request: {page.slowest_request_url or _NA} "
+            f"({_fmt_int_val(page.slowest_request_ms)} ms)"
+        ),
+        f"Top {AI_WATERFALL_TOP_N} requests (slowest first):",
+    ]
+    entries = _sorted_waterfall(page.waterfall)[:AI_WATERFALL_TOP_N]
+    if not entries:
+        lines.append(f"  {_NA}")
+    else:
+        for i, e in enumerate(entries, 1):
+            lines.append(
+                f"  {i}. {e.url or _NA} [{e.resource_type or _NA}] "
+                f"{_fmt_plain(e.size_bytes)} bytes, {_fmt_int_val(e.timing_ms)} ms, "
+                f"status {_fmt_plain(e.status_code)}"
+            )
+    return "\n".join(lines)
 
 
 def analyze_page(
