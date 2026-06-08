@@ -35,6 +35,7 @@ layering cycle). This module owns its own stderr ``Console`` exactly like
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import anthropic
@@ -42,9 +43,11 @@ from rich.console import Console
 
 from perfcrawl.constants import (
     AI_MAX_TOKENS,
+    AI_POOL_SIZE,
     AI_WATERFALL_TOP_N,
     DEFAULT_AI_MODEL,
 )
+from perfcrawl.crawl import is_error_row
 from perfcrawl.models import AnalysisResult, PageResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import for annotations
@@ -303,17 +306,115 @@ def analyze_run(
 ) -> dict:
     """Bounded-pool post-pass: fill ``page.analysis`` for every page; return a summary.
 
-    CONTRACT (Plan 02 implements): mirror ``measure_pass`` —
-    ``ThreadPoolExecutor(max_workers=AI_POOL_SIZE)`` over the pages with one
-    shared thread-safe ``client``. Per page: ``is_error_row(page)`` →
-    short-circuit to ``analysis=None`` with NO API call (D-06); else
-    ``build_digest`` → ``analyze_page`` → assign the result back onto
-    ``page.analysis`` (mutate ``run_record.pages`` in place so the existing
-    scrub/write path serializes it). KeyboardInterrupt does a partial flush.
-    Returns a summary dict with analyzed / degraded / insufficient / violations
-    counts for the stderr aggregate line.
+    Mirrors ``measure_pass`` (D-03/D-09). Per page: ``is_error_row(page)`` (the
+    WR-01 single-source classifier, reused — never hand-rolled) →  short-circuit to
+    ``analysis=None`` with NO API call (D-06), counted "insufficient"; else
+    ``build_digest`` → ``analyze_page`` → assign the ``AnalysisResult | None`` back
+    onto ``page.analysis`` (mutate ``run_record.pages`` in place so the unchanged
+    scrub/write path serializes it). The first non-error page is analyzed
+    SYNCHRONOUSLY to warm the prompt cache, then the rest fan out through a
+    ``ThreadPoolExecutor(max_workers=AI_POOL_SIZE)`` sharing the one thread-safe
+    ``client`` (AI-SPEC Pitfall 4).
+
+    AI-SPEC §6 ONLINE pre-write grounding guardrails (runtime, not CI-only): for
+    every page that got a non-None ``AnalysisResult``, BEFORE it is final the three
+    Task-2 pure functions run over the concatenated Observation/Cause/Optimization
+    text against THAT page's digest. Disposition is FLAG + LOG + COUNT, analysis
+    RETAINED: each hit increments the matching ``violations`` per-check count
+    (AI-SPEC §7 Key Metric 3), one scrubbed stderr line is logged per flagged page,
+    and the (cite-the-numbers-RUBRIC-primary-defended) analysis stays on the page
+    as the monitoring signal — never silently nulled.
+
+    Degrade (D-09): a ``None`` from ``analyze_page`` leaves ``analysis=None``,
+    counts "degraded", logs one scrubbed stderr line — the run never fails. On
+    ``KeyboardInterrupt`` the pool is shut down (``wait=False, cancel_futures=
+    True``) and whatever analyses were filled are kept (partial-flush). Returns
+    ``{"analyzed", "degraded", "insufficient", "violations": {...}}``.
     """
-    raise NotImplementedError("analyze_run is a Wave-0 contract stub; Plan 02 implements it.")
+    _scrub = scrub if scrub is not None else (lambda t: t)
+    console = err_console if err_console is not None else _err_console
+
+    def _emit(msg: str) -> None:
+        console.print(_scrub(msg))
+
+    error_pages = [p for p in run_record.pages if is_error_row(p)]
+    data_pages = [p for p in run_record.pages if not is_error_row(p)]
+
+    # D-06: error rows short-circuit to analysis=None with NO API call.
+    for page in error_pages:
+        page.analysis = None
+    insufficient = len(error_pages)
+
+    def _process(page: PageResult) -> tuple[PageResult, str, AnalysisResult | None]:
+        digest = build_digest(page)
+        return page, digest, analyze_page(client, digest, model)
+
+    # Pitfall 4: warm the cache on the FIRST page synchronously, then fan out.
+    processed: list[tuple[PageResult, str, AnalysisResult | None]] = []
+    try:
+        if data_pages:
+            processed.append(_process(data_pages[0]))
+            rest = data_pages[1:]
+            if rest:
+                executor = ThreadPoolExecutor(max_workers=max(1, AI_POOL_SIZE))
+                try:
+                    for result in executor.map(_process, rest):
+                        processed.append(result)
+                finally:
+                    # Partial-flush: cancel still-queued futures and return promptly.
+                    executor.shutdown(wait=False, cancel_futures=True)
+    except KeyboardInterrupt:
+        # Keep whatever completed; never lose measured work (mirror measure_pass).
+        pass
+
+    analyzed = 0
+    degraded = 0
+    violations = {"bare_inp": 0, "fabricated_number": 0, "out_of_evidence_entity": 0}
+
+    for page, digest, result in processed:
+        if result is None:
+            page.analysis = None
+            degraded += 1
+            _emit(f"AI analysis degraded to null: {page.url}")
+            continue
+
+        # Mutate in place: a populated analysis serializes via the unchanged path.
+        page.analysis = result
+        analyzed += 1
+
+        # AI-SPEC §6 runtime pre-write guardrails — FLAG + LOG + COUNT, retain.
+        text = " ".join(
+            part
+            for part in (result.observation, result.potential_cause, result.suggested_optimization)
+            if part
+        )
+        fired: list[str] = []
+        if not check_no_bare_inp(text):
+            violations["bare_inp"] += 1
+            fired.append("bare_inp")
+        fabricated = find_fabricated_numbers(text, digest)
+        if fabricated:
+            violations["fabricated_number"] += len(fabricated)
+            fired.append("fabricated_number")
+        entities = find_unsupported_entities(text, digest)
+        if entities:
+            violations["out_of_evidence_entity"] += len(entities)
+            fired.append("out_of_evidence_entity")
+        if fired:
+            _emit(f"grounding flags on {page.url}: {', '.join(fired)} (analysis retained)")
+
+    total_violations = sum(violations.values())
+    _emit(
+        f"AI analysis: {degraded}/{len(data_pages)} degraded to null; "
+        f"{total_violations} grounding violations flagged"
+    )
+
+    return {
+        "analyzed": analyzed,
+        "degraded": degraded,
+        "insufficient": insufficient,
+        "violations": violations,
+    }
 
 
 # --- Grounding pure functions (run in CI eval AND at runtime as guardrails) ---
