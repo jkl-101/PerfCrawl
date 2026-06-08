@@ -33,14 +33,20 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import anthropic
 import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from perfcrawl import analysis
 from perfcrawl.auth import AuthError, make_scrubber, resolve_auth_state
 from perfcrawl.constants import (
+    AI_MAX_RETRIES,
+    AI_REQUEST_TIMEOUT_S,
+    ANTHROPIC_API_KEY_ENV,
     CRAWLER_USER_AGENT,
+    DEFAULT_AI_MODEL,
     DEFAULT_CONCURRENCY,
     DEFAULT_CRAWL_SAMPLES_N,
     DEFAULT_MAX_DEPTH,
@@ -142,6 +148,32 @@ def _resolve_crawl_auth(
         )
     finally:
         _teardown_chrome(chrome, user_data_dir)
+
+
+def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> None:
+    """Construct the shared ``Anthropic`` client and run the ``analyze_run`` post-pass.
+
+    D-02 / D-10: invoked only when ``--ai`` is set AND the key validated at t=0, so
+    ``os.environ[ANTHROPIC_API_KEY_ENV]`` is guaranteed present here. One client is
+    shared across the bounded analyze pool (AI-SPEC Pitfall 4); the SDK owns retry
+    (``max_retries``) and per-request timeout — never a hand-rolled loop (D-11). The
+    key-seeded ``scrub`` is threaded in so every degrade/grounding stderr line and
+    the in-place-mutated ``analysis`` fields are redacted (AUTH-04 / T-05-redact).
+    ``analyze_run`` mutates ``run_record.pages`` in place, so the unchanged
+    scrub→write_outputs→write_run path serializes the populated ``analysis`` for free.
+    """
+    client = anthropic.Anthropic(
+        api_key=os.environ[ANTHROPIC_API_KEY_ENV],
+        max_retries=AI_MAX_RETRIES,
+        timeout=AI_REQUEST_TIMEOUT_S,
+    )
+    analysis.analyze_run(
+        run_record,
+        client=client,
+        model=ai_model,
+        scrub=scrub,
+        err_console=err_console,
+    )
 
 
 # D-05 requires explicit subcommand verbs (``measure`` / ``crawl``, plus future
@@ -475,6 +507,19 @@ def crawl(
         "--emulation",
         help="mobile | desktop (D-02 form factor).",
     ),
+    ai: bool = typer.Option(
+        False,
+        "--ai",
+        help="Run per-page AI analysis after measurement (D-01). Requires "
+        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
+        "in ps/history; D-10).",
+    ),
+    ai_model: str = typer.Option(
+        DEFAULT_AI_MODEL,
+        "--ai-model",
+        help="Anthropic model for --ai analysis (default: the cost-appropriate "
+        "bulk model; override with e.g. claude-opus-4-8 for small high-value crawls).",
+    ),
     output_dir: Path = typer.Option(
         Path("output"),
         "--output-dir",
@@ -521,10 +566,25 @@ def crawl(
     username = os.environ.get(PERFCRAWL_USERNAME_ENV)
     password = os.environ.get(PERFCRAWL_PASSWORD_ENV)
 
-    # Seed the central credential scrubber ONCE (D-07). Applied to every sink
-    # (stderr, RunRecord JSON, LH artifacts) so no credential ever lands in a log
-    # or on disk. Empty/None secrets are filtered by make_scrubber (no-op scrub).
-    scrub = make_scrubber(username, password)
+    # D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never a
+    # flag — argv is visible in ps/history). Fail fast at t=0 (USER_ERROR, reusing
+    # the "bad flags" band), BEFORE discovery or any measurement, so a missing key
+    # never produces a silent no-op crawl. Read AFTER the .env load above so a key
+    # in a gitignored .env counts. The error text carries no secret (the key is
+    # absent), but route nothing sensitive through it regardless.
+    if ai and not os.environ.get(ANTHROPIC_API_KEY_ENV):
+        err_console.print(
+            "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
+            "never a flag"
+        )
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+    # Seed the central credential scrubber ONCE (D-07 / AUTH-04). Applied to every
+    # sink (stderr, RunRecord JSON, result.csv, --json stdout, LH artifacts, AND
+    # the AI analysis fields) so no credential ever lands in a log or on disk. The
+    # ANTHROPIC_API_KEY is seeded as a third secret (T-05-redact) so it too is
+    # redacted at every sink; a None key (non-AI run) is a filtered no-op.
+    scrub = make_scrubber(username, password, os.environ.get(ANTHROPIC_API_KEY_ENV))
 
     success_rule: dict[str, str] | None = None
     if success_text:
@@ -680,6 +740,16 @@ def crawl(
                 "or seed a non-denied path if this crawl was intentional."
             )
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
+
+    # --- D-02: AI analysis post-pass (only when --ai; runs AFTER measurement and
+    # BEFORE any output is scrubbed/written). analyze_run mutates run_record.pages
+    # in place, filling page.analysis, so the unchanged scrub→write_outputs→
+    # write_run path below serializes the populated analysis for free (output.py /
+    # store.py / models.py UNCHANGED — Phase 6 owns output formats). The key is
+    # threaded through `scrub` so every analysis field + degrade/grounding log line
+    # is redacted (AUTH-04 / T-05-redact).
+    if ai:
+        _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
 
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches
     # disk. A Lighthouse HTML/JSON capture of an authenticated page (or the login
