@@ -23,6 +23,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from uuid import UUID
 
+import anthropic
+import httpx
 import pytest
 
 from perfcrawl.models import (
@@ -34,6 +36,111 @@ from perfcrawl.models import (
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 LH_FIXTURES_DIR = FIXTURES_DIR / "lighthouse"
+DIGEST_FIXTURES_DIR = FIXTURES_DIR / "digests"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 5: FakeAnthropic test double — no network, no key (Validation Arch.)
+#
+# A drop-in stand-in for ``anthropic.Anthropic`` whose ``.messages.parse(...)``
+# returns a canned object exposing ``.parsed_output`` (an ``AnalysisResult`` or
+# ``None``) and ``.usage.cache_read_input_tokens``, or raises ``anthropic.APIError``.
+# ``.call_count`` records how many times ``parse`` was invoked — the D-06
+# short-circuit test asserts it stays 0 for a fully-null error row.
+# --------------------------------------------------------------------------- #
+
+
+def _dummy_api_error() -> anthropic.APIError:
+    """Construct a real ``anthropic.APIError`` (degrade path) with no live request."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.APIError("fake transient API failure (test)", request, body=None)
+
+
+class _FakeUsage:
+    """Mimics ``message.usage`` — only the cache-read counter the monitoring path reads."""
+
+    def __init__(self, cache_read_input_tokens: int = 0) -> None:
+        self.cache_read_input_tokens = cache_read_input_tokens
+        self.cache_creation_input_tokens = 0
+
+
+class _FakeParsed:
+    """Mimics what ``client.messages.parse(...)`` returns (``.parsed_output`` + ``.usage``)."""
+
+    def __init__(self, parsed_output: AnalysisResult | None, cache_read: int = 0) -> None:
+        self.parsed_output = parsed_output
+        self.usage = _FakeUsage(cache_read_input_tokens=cache_read)
+
+
+class _FakeMessages:
+    """The ``client.messages`` namespace — only ``parse`` is implemented."""
+
+    def __init__(self, parent: "FakeAnthropic") -> None:
+        self._parent = parent
+
+    def parse(self, **kwargs) -> _FakeParsed:
+        self._parent.call_count += 1
+        self._parent.calls.append(kwargs)
+        if self._parent.error is not None:
+            raise self._parent.error
+        return _FakeParsed(self._parent.result, cache_read=self._parent.cache_read)
+
+
+class FakeAnthropic:
+    """A canned ``anthropic.Anthropic`` double for the deterministic eval suite.
+
+    Variants (all keyword-only):
+      - good result:   ``FakeAnthropic(result=AnalysisResult(...))``
+      - refusal/None:  ``FakeAnthropic(result=None)`` (degrade like an exception)
+      - APIError:      ``FakeAnthropic(error=anthropic.APIError(...))`` — or omit
+                       ``error`` and pass ``raise_api_error=True`` for a default one
+      - call-count:    every variant records ``.call_count`` + ``.calls`` so the
+                       D-06 short-circuit can assert ``parse`` was NEVER invoked.
+
+    No network, no API key — constructing or calling it never touches Anthropic.
+    """
+
+    def __init__(
+        self,
+        *,
+        result: AnalysisResult | None = None,
+        error: BaseException | None = None,
+        raise_api_error: bool = False,
+        cache_read: int = 0,
+    ) -> None:
+        if error is None and raise_api_error:
+            error = _dummy_api_error()
+        self.result = result
+        self.error = error
+        self.cache_read = cache_read
+        self.call_count = 0
+        self.calls: list[dict] = []
+        self.messages = _FakeMessages(self)
+
+
+@pytest.fixture
+def fake_anthropic_good() -> FakeAnthropic:
+    """A FakeAnthropic that returns a schema-valid grounded ``AnalysisResult``."""
+    return FakeAnthropic(
+        result=AnalysisResult(
+            observation="LCP is 2410 ms (good, <2500).",
+            potential_cause="The main JS bundle is the slowest request at 612 ms.",
+            suggested_optimization="Code-split the app bundle to shed blocking JS.",
+        ),
+        cache_read=1200,
+    )
+
+
+@pytest.fixture
+def fake_anthropic_none() -> FakeAnthropic:
+    """A FakeAnthropic whose ``parse`` returns ``parsed_output=None`` (refusal → degrade)."""
+    return FakeAnthropic(result=None)
+
+
+@pytest.fixture
+def fake_anthropic_error() -> FakeAnthropic:
+    """A FakeAnthropic whose ``parse`` raises ``anthropic.APIError`` (degrade path)."""
+    return FakeAnthropic(raise_api_error=True)
 
 # The spike's reusable single-file Django auth fixture (CSRF + sessionid +
 # @login_required /dashboard/, admin/admin123). Phase 4's e2e auth test
@@ -192,6 +299,35 @@ def run_v1(run_v1_json: str) -> RunRecord:
 def lh_home_200() -> dict:
     """A real LH 13.3.0 JSON capture of a 200-response homepage (Phase 2 D-09/D-12)."""
     return json.loads((LH_FIXTURES_DIR / "studyhalo-home-200.json").read_text())
+
+
+# --- Phase 5 digest fixtures (the 12 AI-SPEC §5 reference cases) -------------
+
+
+@pytest.fixture
+def digest_page():
+    """Load a curated digest fixture by name into a ``PageResult`` (mirrors lh_home_200).
+
+    Usage: ``digest_page("slow-lcp")`` → the ``PageResult`` parsed from
+    ``tests/fixtures/digests/slow-lcp.json``. The fixtures double as the eval
+    reference dataset and as ``build_digest`` inputs (same canned-fixture
+    discipline as ``tests/fixtures/lighthouse/*.json``).
+    """
+
+    def _load(name: str) -> PageResult:
+        path = DIGEST_FIXTURES_DIR / f"{name}.json"
+        return PageResult.model_validate_json(path.read_text())
+
+    return _load
+
+
+@pytest.fixture
+def all_digest_pages() -> list[PageResult]:
+    """Every curated digest fixture parsed into a ``PageResult`` (sorted by filename)."""
+    return [
+        PageResult.model_validate_json(p.read_text())
+        for p in sorted(DIGEST_FIXTURES_DIR.glob("*.json"))
+    ]
 
 
 @pytest.fixture

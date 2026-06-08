@@ -1,0 +1,62 @@
+{
+  "url": "https://www.studyhalo.com/courses/intro",
+  "url_key": "https://www.studyhalo.com/courses/intro",
+  "perf_score": 55.0,
+  "a11y_score": 92.0,
+  "seo_score": 90.0,
+  "best_practices_score": 88.0,
+  "lcp_ms": {
+    "median": 4800.0,
+    "samples": [
+      4800.0
+    ]
+  },
+  "cls": {
+    "median": 0.03,
+    "samples": [
+      0.03
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 150.0,
+    "samples": [
+      150.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 300.0,
+    "samples": [
+      300.0
+    ]
+  },
+  "request_count": 40,
+  "total_bytes": 3200000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/media/hero.png",
+  "slowest_request_ms": 1820.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/media/hero.png",
+      "resource_type": "image",
+      "size_bytes": 2410000,
+      "timing_ms": 1820.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.js",
+      "resource_type": "script",
+      "size_bytes": 320000,
+      "timing_ms": 540.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.css",
+      "resource_type": "stylesheet",
+      "size_bytes": 64000,
+      "timing_ms": 210.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null
+}

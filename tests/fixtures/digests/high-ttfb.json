@@ -1,0 +1,55 @@
+{
+  "url": "https://www.studyhalo.com/search",
+  "url_key": "https://www.studyhalo.com/search",
+  "perf_score": 65.0,
+  "a11y_score": 94.0,
+  "seo_score": 91.0,
+  "best_practices_score": 92.0,
+  "lcp_ms": {
+    "median": 3000.0,
+    "samples": [
+      3000.0
+    ]
+  },
+  "cls": {
+    "median": 0.04,
+    "samples": [
+      0.04
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 140.0,
+    "samples": [
+      140.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 2400.0,
+    "samples": [
+      2400.0
+    ]
+  },
+  "request_count": 30,
+  "total_bytes": 800000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/search?q=algebra",
+  "slowest_request_ms": 2400.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/search?q=algebra",
+      "resource_type": "document",
+      "size_bytes": 36000,
+      "timing_ms": 2400.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.js",
+      "resource_type": "script",
+      "size_bytes": 180000,
+      "timing_ms": 320.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null
+}

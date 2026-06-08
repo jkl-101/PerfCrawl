@@ -1,0 +1,62 @@
+{
+  "url": "https://www.studyhalo.com/enroll",
+  "url_key": "https://www.studyhalo.com/enroll",
+  "perf_score": 50.0,
+  "a11y_score": 90.0,
+  "seo_score": 89.0,
+  "best_practices_score": 86.0,
+  "lcp_ms": {
+    "median": 3500.0,
+    "samples": [
+      3500.0
+    ]
+  },
+  "cls": {
+    "median": 0.05,
+    "samples": [
+      0.05
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 300.0,
+    "samples": [
+      300.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 1200.0,
+    "samples": [
+      1200.0
+    ]
+  },
+  "request_count": 60,
+  "total_bytes": 2000000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/main.js",
+  "slowest_request_ms": 980.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/main.js",
+      "resource_type": "script",
+      "size_bytes": 540000,
+      "timing_ms": 980.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/main.css",
+      "resource_type": "stylesheet",
+      "size_bytes": 96000,
+      "timing_ms": 320.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/enroll",
+      "resource_type": "document",
+      "size_bytes": 22000,
+      "timing_ms": 1200.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null
+}

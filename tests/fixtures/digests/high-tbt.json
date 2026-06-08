@@ -1,0 +1,55 @@
+{
+  "url": "https://www.studyhalo.com/dashboard",
+  "url_key": "https://www.studyhalo.com/dashboard",
+  "perf_score": 60.0,
+  "a11y_score": 90.0,
+  "seo_score": 88.0,
+  "best_practices_score": 85.0,
+  "lcp_ms": {
+    "median": 2400.0,
+    "samples": [
+      2400.0
+    ]
+  },
+  "cls": {
+    "median": 0.05,
+    "samples": [
+      0.05
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 780.0,
+    "samples": [
+      780.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 280.0,
+    "samples": [
+      280.0
+    ]
+  },
+  "request_count": 55,
+  "total_bytes": 1500000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/vendor.bundle.js",
+  "slowest_request_ms": 1340.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/vendor.bundle.js",
+      "resource_type": "script",
+      "size_bytes": 980000,
+      "timing_ms": 1340.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.bundle.js",
+      "resource_type": "script",
+      "size_bytes": 420000,
+      "timing_ms": 760.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null
+}
