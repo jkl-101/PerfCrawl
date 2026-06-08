@@ -34,19 +34,20 @@ layering cycle). This module owns its own stderr ``Console`` exactly like
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
+import anthropic
 from rich.console import Console
 
 from perfcrawl.constants import (
+    AI_MAX_TOKENS,
     AI_WATERFALL_TOP_N,
     DEFAULT_AI_MODEL,
 )
 from perfcrawl.models import AnalysisResult, PageResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import for annotations
-    import anthropic
-
     from perfcrawl.models import RunRecord, WaterfallEntry
 
 # Module-owned stderr console (mirrors measure_pass.py:69-72). A library module
@@ -265,14 +266,31 @@ def analyze_page(
 ) -> AnalysisResult | None:
     """Run one structured-output call for ``digest_text``; degrade to ``None`` (D-09).
 
-    CONTRACT (Plan 02 implements): ``client.messages.parse(model=...,
-    max_tokens=AI_MAX_TOKENS, temperature=0, system=[{RUBRIC, cache_control}],
-    messages=[{user, digest_text}], output_format=AnalysisResult)`` →
-    ``resp.parsed_output``. Catches ``anthropic.APIError`` AND a broad
-    ``Exception`` (defense-in-depth), and treats ``parsed_output is None``
-    identically → returns ``None`` so a single AI miss never crashes the run.
+    ``client.messages.parse(model=..., max_tokens=AI_MAX_TOKENS, temperature=0,
+    system=[{RUBRIC, cache_control: ephemeral}], messages=[{user, digest_text}],
+    output_format=AnalysisResult)`` → ``resp.parsed_output``. The static RUBRIC is
+    the ONLY thing in ``system`` (so the cache prefix stays byte-stable — Pitfall
+    1); the variable digest goes in ``messages``, never interpolated into the
+    prefix. Catches ``anthropic.APIError`` AND a broad ``Exception`` (defense-in-
+    depth, mirroring measure_pass CR-01), and treats ``parsed_output is None``
+    (a refusal / max_tokens truncation — Pitfall 3) identically → returns ``None``
+    so a single AI miss never crashes the run. No app-level retry (D-11): the SDK
+    already exhausted ``max_retries`` before raising.
     """
-    raise NotImplementedError("analyze_page is a Wave-0 contract stub; Plan 02 implements it.")
+    try:
+        resp = client.messages.parse(
+            model=model,
+            max_tokens=AI_MAX_TOKENS,
+            temperature=0,
+            system=[{"type": "text", "text": RUBRIC, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": digest_text}],
+            output_format=AnalysisResult,
+        )
+        return resp.parsed_output
+    except anthropic.APIError:
+        return None
+    except Exception:
+        return None
 
 
 def analyze_run(
@@ -304,35 +322,154 @@ def analyze_run(
 # resolvable symbol and fail RED on NotImplementedError, not ImportError.
 
 
+# Numeric token: an integer or decimal, optionally thousands-grouped with commas
+# (e.g. "4800", "1,234,567", "0.020"). Used by both the digest-set extraction and
+# the analysis-text extraction so the two normalize identically.
+_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+# Window (chars) around an "INP" mention in which an adjacent number makes a claim
+# "about INP", and the wider window in which a TBT / proxy / lab label clears it.
+_INP_NUM_WINDOW = 15
+_INP_LABEL_WINDOW = 40
+
+# Curated stack/vendor wordlist (D-05 / AI-SPEC dim 3). A named framework, server,
+# CDN, or library asserted in the analysis but ABSENT from the digest evidence is
+# an out-of-evidence entity. Matched on word boundaries, case-insensitively.
+_ENTITY_WORDLIST: tuple[str, ...] = (
+    # frontend frameworks / libraries
+    "react",
+    "angular",
+    "vue",
+    "svelte",
+    "ember",
+    "backbone",
+    "preact",
+    "jquery",
+    "next.js",
+    "nextjs",
+    "nuxt",
+    "gatsby",
+    "remix",
+    "alpine.js",
+    "bootstrap",
+    "tailwind",
+    "material-ui",
+    # build tools / bundlers
+    "webpack",
+    "vite",
+    "rollup",
+    "parcel",
+    "babel",
+    "esbuild",
+    # backend frameworks / languages
+    "django",
+    "flask",
+    "fastapi",
+    "rails",
+    "laravel",
+    "symfony",
+    "express",
+    "node.js",
+    "nodejs",
+    "spring",
+    "asp.net",
+    "php",
+    "phoenix",
+    # CMS / e-commerce
+    "wordpress",
+    "drupal",
+    "joomla",
+    "shopify",
+    "magento",
+    "wix",
+    "squarespace",
+    # servers / runtimes / caches
+    "nginx",
+    "apache",
+    "iis",
+    "gunicorn",
+    "uvicorn",
+    "varnish",
+    "redis",
+    "memcached",
+    "postgres",
+    "mysql",
+    "mongodb",
+    # CDNs / third-parties
+    "cloudflare",
+    "fastly",
+    "akamai",
+    "cloudfront",
+    "netlify",
+    "vercel",
+    "google tag manager",
+    "google analytics",
+    "hotjar",
+    "segment",
+    "stripe",
+    "intercom",
+    "hubspot",
+    "optimizely",
+)
+
+
+def _norm_num(token: str) -> float | None:
+    """Normalize a numeric token to a comparable float (strip commas); ``None`` on failure."""
+    try:
+        return float(token.replace(",", ""))
+    except ValueError:
+        return None
+
+
 def check_no_bare_inp(text: str) -> bool:
     """True iff ``text`` contains no bare-INP claim (D-15 / mirrors ``_no_bare_inp``).
 
-    CONTRACT (Plan 02 implements): PASS (True) when any INP mention is adjacent
-    to a TBT / "lab proxy" label; FAIL (False) on a bare "INP is 480 ms"-style
-    assertion of a real field-INP value the headless pass cannot measure.
+    PASS (True) when no real field-INP value is asserted; FAIL (False) on a bare
+    "INP is 480 ms"-style claim — a number sitting next to an "INP" mention that is
+    NOT cleared by a nearby TBT / "lab proxy" label. The headless pass measures
+    TBT (the lab proxy), never real field INP, so a numbered bare INP is wrong.
     """
-    raise NotImplementedError("check_no_bare_inp is a Wave-0 contract stub; Plan 02 implements it.")
+    lowered = text.lower()
+    for m in re.finditer("inp", lowered):
+        start, end = m.start(), m.end()
+        num_window = lowered[max(0, start - _INP_NUM_WINDOW) : end + _INP_NUM_WINDOW]
+        if not re.search(r"\d", num_window):
+            continue  # no number adjacent to this INP mention → not a numeric claim
+        label_window = lowered[max(0, start - _INP_LABEL_WINDOW) : end + _INP_LABEL_WINDOW]
+        if not re.search(r"tbt|proxy|lab", label_window):
+            return False  # a bare-INP number with no TBT/proxy/lab label nearby
+    return True
 
 
 def find_fabricated_numbers(text: str, digest_text: str) -> list[str]:
     """Return numeric tokens in ``text`` absent from ``digest_text`` (AI-01 anti-hallucination).
 
-    CONTRACT (Plan 02 implements): extract numerics from the analysis text and
-    return those that do not match a value present in the digest (with unit /
-    format normalization). Empty list = fully grounded.
+    Extract every numeric from the analysis ``text`` and return those whose
+    normalized value does not appear among the digest's numbers (commas stripped,
+    trailing-zero/format differences collapsed via float comparison). Empty list =
+    every cited number is grounded in the digest.
     """
-    raise NotImplementedError(
-        "find_fabricated_numbers is a Wave-0 contract stub; Plan 02 implements it."
-    )
+    digest_nums = {n for tok in _NUM_RE.findall(digest_text) if (n := _norm_num(tok)) is not None}
+    fabricated: list[str] = []
+    for tok in _NUM_RE.findall(text):
+        n = _norm_num(tok)
+        if n is not None and n not in digest_nums:
+            fabricated.append(tok)
+    return fabricated
 
 
 def find_unsupported_entities(text: str, digest_text: str) -> list[str]:
     """Return framework/server/CDN/etc. entities in ``text`` absent from ``digest_text`` (AI-02).
 
-    CONTRACT (Plan 02 implements): flag any named framework / server / CDN /
-    third-party / specific render-blocking resource asserted in the analysis
-    that does not appear in the digest evidence. Empty list = no guessed stack.
+    Flag any curated stack/vendor wordlist entity asserted in the analysis ``text``
+    (word-boundary, case-insensitive) that does NOT also appear in the digest
+    evidence (e.g. as a waterfall request URL). Empty list = no guessed stack.
     """
-    raise NotImplementedError(
-        "find_unsupported_entities is a Wave-0 contract stub; Plan 02 implements it."
-    )
+    text_l = text.lower()
+    digest_l = digest_text.lower()
+    found: list[str] = []
+    for term in _ENTITY_WORDLIST:
+        pat = r"\b" + re.escape(term.lower()) + r"\b"
+        if re.search(pat, text_l) and not re.search(pat, digest_l):
+            found.append(term)
+    return found
