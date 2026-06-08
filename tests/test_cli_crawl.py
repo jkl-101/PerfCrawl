@@ -440,6 +440,36 @@ def test_non_autherror_leak_is_scrubbed_and_exits_three(
     assert sentinel_pass not in combined
 
 
+def test_ai_requires_key(monkeypatch, tmp_path: Path, local_server: str) -> None:
+    """D-10: ``crawl <url> --ai`` with no ``ANTHROPIC_API_KEY`` fails fast.
+
+    The fail-fast must exit ``ExitCode.USER_ERROR`` (1) at t=0 — BEFORE discovery
+    or any measurement runs — so a missing key never produces a silent no-op
+    crawl. With the measure seam patched to a call-recorder, the recorder must
+    show ZERO calls (discovery/measurement never started).
+
+    Wave-0 RED: the ``--ai`` flag + the D-10 check land in Plan 03, so today an
+    unknown ``--ai`` option is a Typer usage error (exit 2 ≠ 1) — this test fails
+    RED on the exit-code assertion until Plan 03 wires the flag + fail-fast.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--ai",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.USER_ERROR, result.stdout + result.stderr
+    assert calls == [], "discovery/measurement must never run on the D-10 fail-fast"
+
+
 def test_auth_state_and_login_url_mutually_exclusive(
     monkeypatch, tmp_path: Path, local_server: str
 ) -> None:
