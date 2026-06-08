@@ -352,6 +352,19 @@ def measure(
         "--emulation",
         help="mobile | desktop (D-02 form factor).",
     ),
+    ai: bool = typer.Option(
+        False,
+        "--ai",
+        help="Run AI analysis on the measured page (D-01). Requires "
+        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
+        "in ps/history; D-10).",
+    ),
+    ai_model: str = typer.Option(
+        DEFAULT_AI_MODEL,
+        "--ai-model",
+        help="Anthropic model for --ai analysis (default: the cost-appropriate "
+        "bulk model; override with e.g. claude-opus-4-8).",
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -364,6 +377,26 @@ def measure(
     ),
 ) -> None:
     """Measure ``URL`` end-to-end: Chrome → LH → outputs → SQLite → stdout."""
+    # --- D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never
+    # a flag). Fail fast at t=0 — BEFORE measure_url launches Chrome — so a missing
+    # key never costs a measurement. Read AFTER the .env load so a key in a
+    # gitignored .env counts (mirrors crawl()).
+    if ai:
+        _load_dotenv_if_present()
+        if not os.environ.get(ANTHROPIC_API_KEY_ENV):
+            err_console.print(
+                "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
+                "never a flag"
+            )
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+    # AUTH-04 / RESEARCH Pitfall 5: measure() had NO scrubber. When --ai is set the
+    # ANTHROPIC_API_KEY becomes a secret that can leak into the measure output path
+    # (result.json, --json stdout, the analysis fields), so seed a key-only scrubber
+    # and thread it into write_outputs. A non-AI measure run keeps the prior
+    # behavior (scrub=None → identity in write_outputs).
+    scrub = make_scrubber(os.environ.get(ANTHROPIC_API_KEY_ENV)) if ai else None
+
     # --- D-15 USER_ERROR arm (input validation, before any subprocess) ---
     try:
         run_record, raw_artifacts = measure_url(url=url, samples=samples, emulation=emulation)
@@ -374,9 +407,17 @@ def measure(
         err_console.print(f"[red]measurement failed:[/red] {e}")
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR)) from None
 
+    # --- D-02: AI analysis post-pass (only when --ai), AFTER measurement and BEFORE
+    # output. analyze_run mutates run_record.pages in place so the write path below
+    # serializes page.analysis for free; the key-seeded scrub redacts every sink.
+    if ai:
+        _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
     try:
-        run_dir = write_outputs(run_record, output_dir=output_dir, raw_artifacts=raw_artifacts)
+        run_dir = write_outputs(
+            run_record, output_dir=output_dir, raw_artifacts=raw_artifacts, scrub=scrub
+        )
     except OSError as e:
         err_console.print(f"[red]error:[/red] cannot write to {output_dir}: {e}")
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
