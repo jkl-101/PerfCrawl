@@ -537,13 +537,16 @@ def check_no_bare_inp(text: str) -> bool:
     TBT (the lab proxy), never real field INP, so a numbered bare INP is wrong.
     """
     lowered = text.lower()
-    for m in re.finditer("inp", lowered):
+    # WR-02: anchor on word boundaries. Unanchored "inp" matched "input" (false
+    # positive) and unanchored "lab" matched "available"/"label" (false negative
+    # that cleared a genuinely bare-INP claim). \b... requires a standalone word.
+    for m in re.finditer(r"\binp\b", lowered):
         start, end = m.start(), m.end()
         num_window = lowered[max(0, start - _INP_NUM_WINDOW) : end + _INP_NUM_WINDOW]
         if not re.search(r"\d", num_window):
             continue  # no number adjacent to this INP mention → not a numeric claim
         label_window = lowered[max(0, start - _INP_LABEL_WINDOW) : end + _INP_LABEL_WINDOW]
-        if not re.search(r"tbt|proxy|lab", label_window):
+        if not re.search(r"\btbt\b|\bproxy\b|\blab\b", label_window):
             return False  # a bare-INP number with no TBT/proxy/lab label nearby
     return True
 
