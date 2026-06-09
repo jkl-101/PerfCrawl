@@ -57,6 +57,30 @@ def test_digest_stable(digest_page) -> None:
     assert not _UUID_RE.search(first), "digest must contain no UUID token"
 
 
+def test_partial_null_digest_signals_missing_metrics(digest_page) -> None:
+    """A partial-null page's digest exposes missing metrics as the explicit ``n/a``
+    insufficient-data signal while present metrics keep their captured values.
+
+    This is the *input-contract* half of AI-SPEC eval dimension 5 (insufficient-data
+    honesty): the model can only honestly say "insufficient data … for the missing
+    parts" if the digest it receives actually surfaces the gap as ``n/a`` rather than
+    silently omitting the line. This test guards that signal deterministically. The
+    complementary *output* assertion — that the model's note then says an
+    "insufficient data"-class phrase for those missing dimensions — is LLM-output
+    behavior and belongs to the judge layer (Phase 5.1), not a deterministic check.
+    """
+    digest = analysis.build_digest(digest_page("partial-null"))
+
+    # Missing metrics surface as the explicit insufficient-data signal...
+    assert "Performance score (0-100, higher is better): n/a" in digest
+    assert "LCP (ms): n/a" in digest
+    assert "not real field INP): n/a" in digest  # TBT (the labeled INP proxy) is null
+    # ...while the metrics that WERE captured still render their real values.
+    assert "CLS: 0.060" in digest
+    assert "TTFB (ms): 220" in digest
+    assert "Request count: 28" in digest
+
+
 def test_rubric_frozen() -> None:
     """``RUBRIC`` is a frozen module-level ``str`` long enough to cache (Pitfall 2)."""
     rubric = analysis.RUBRIC
