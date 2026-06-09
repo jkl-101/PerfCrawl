@@ -40,7 +40,7 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra -m 'not e2e'"
+addopts = "-ra -m 'not e2e and not llm'"
 markers = [
     "e2e: end-to-end test requiring Node + Chrome + network (opt-in; skipped by default in CI)",
     "llm: advisory LLM-judge eval requiring ANTHROPIC_API_KEY + network (opt-in; run via -m llm)",

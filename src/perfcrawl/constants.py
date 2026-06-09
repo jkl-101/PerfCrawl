@@ -229,3 +229,37 @@ ANTHROPIC_API_KEY_ENV: str = "ANTHROPIC_API_KEY"
 # existing `ExitCode.USER_ERROR = 1` (its docstring already covers "bad flags") —
 # NO new ExitCode member is added. A missing key on `--ai` is a user-invocation
 # error, not a measurement/auth failure; `case $? in 1) fix invocation ;; esac`.
+
+
+# --- Phase 05.1 eval band cutoffs (AI-SPEC §4 / FM-5 single-source-of-truth) -
+# The deterministic dim-7 CWV band pre-flag classifies each page's LCP/CLS into
+# the web.dev Core Web Vitals bands BEFORE the paid judge spends a token. These
+# four cutoffs MUST stay byte-identical to the numbers frozen in
+# ``analysis.RUBRIC`` lines 131-139 ("LCP … GOOD <= 2500 ms … POOR > 4000 ms";
+# "CLS … GOOD <= 0.1 … POOR > 0.25"). FM-5: the pre-flag and the judge can never
+# disagree on a band — ``tests/eval/test_band_preflag.py`` grep-asserts the
+# equality against the rubric text. To move a band, edit BOTH this constant and
+# the rubric glossary in the same change.
+LCP_GOOD_MS: int = 2500  # web.dev: LCP <= 2500 ms is GOOD
+LCP_POOR_MS: int = 4000  # web.dev: LCP > 4000 ms is POOR
+CLS_GOOD: float = 0.1  # web.dev: CLS <= 0.1 is GOOD
+CLS_POOR: float = 0.25  # web.dev: CLS > 0.25 is POOR
+
+
+def cwv_band(value: float | None, good: float, poor: float) -> str:
+    """Classify a Core Web Vital value into its web.dev band (pure, None-safe).
+
+    Returns ``"n/a"`` when ``value`` is None (insufficient data — never raises,
+    matching the grounding pure-fn discipline), ``"good"`` when
+    ``value <= good`` (inclusive), ``"needs-improvement"`` when
+    ``value <= poor``, else ``"poor"``. The inclusive lower bound makes a value
+    sitting exactly on the GOOD cutoff (e.g. LCP 2500 ms, CLS 0.1) classify as
+    good — matching the rubric's ``GOOD <= 2500 ms`` / ``GOOD <= 0.1`` wording.
+    """
+    if value is None:
+        return "n/a"
+    if value <= good:
+        return "good"
+    if value <= poor:
+        return "needs-improvement"
+    return "poor"
