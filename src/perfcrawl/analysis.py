@@ -380,6 +380,13 @@ def analyze_run(
     except KeyboardInterrupt:
         # Keep whatever completed; never lose measured work (mirror measure_pass).
         pass
+    except Exception:
+        # WR-05: the docstring promises "the run never fails". analyze_page already
+        # swallows its own errors, but build_digest / the executor.map re-raise are
+        # outside that guard. A non-KI failure here must degrade to "no analysis"
+        # for the remaining pages rather than propagate and discard the entire
+        # measured-and-paid-for run (the --ai post-pass runs BEFORE write_outputs).
+        _emit("AI analysis post-pass failed; continuing with no analysis")
 
     analyzed = 0
     degraded = 0
@@ -397,25 +404,38 @@ def analyze_run(
         analyzed += 1
 
         # AI-SPEC §6 runtime pre-write guardrails — FLAG + LOG + COUNT, retain.
-        text = " ".join(
-            part
-            for part in (result.observation, result.potential_cause, result.suggested_optimization)
-            if part
-        )
-        fired: list[str] = []
-        if not check_no_bare_inp(text):
-            violations["bare_inp"] += 1
-            fired.append("bare_inp")
-        fabricated = find_fabricated_numbers(text, digest)
-        if fabricated:
-            violations["fabricated_number"] += len(fabricated)
-            fired.append("fabricated_number")
-        entities = find_unsupported_entities(text, digest)
-        if entities:
-            violations["out_of_evidence_entity"] += len(entities)
-            fired.append("out_of_evidence_entity")
-        if fired:
-            _emit(f"grounding flags on {page.url}: {', '.join(fired)} (analysis retained)")
+        # WR-05: a grounding function raising over unexpected input must not abort
+        # the post-pass and discard the run. The analysis is already retained on
+        # the page above; on a non-KI failure here, skip this page's violation
+        # counting and continue (KeyboardInterrupt still propagates).
+        try:
+            text = " ".join(
+                part
+                for part in (
+                    result.observation,
+                    result.potential_cause,
+                    result.suggested_optimization,
+                )
+                if part
+            )
+            fired: list[str] = []
+            if not check_no_bare_inp(text):
+                violations["bare_inp"] += 1
+                fired.append("bare_inp")
+            fabricated = find_fabricated_numbers(text, digest)
+            if fabricated:
+                violations["fabricated_number"] += len(fabricated)
+                fired.append("fabricated_number")
+            entities = find_unsupported_entities(text, digest)
+            if entities:
+                violations["out_of_evidence_entity"] += len(entities)
+                fired.append("out_of_evidence_entity")
+            if fired:
+                _emit(f"grounding flags on {page.url}: {', '.join(fired)} (analysis retained)")
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            _emit(f"grounding check failed on {page.url}; analysis retained, not flagged")
 
     total_violations = sum(violations.values())
     _emit(
