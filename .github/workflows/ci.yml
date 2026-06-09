@@ -1,0 +1,36 @@
+# PerfCrawl CI — Lane 1 only (D-02).
+#
+# The free, deterministic eval gate runs as a required, blocking check on every
+# PR and push: `uv run pytest tests/eval -q` inherits the default marker
+# deselect from pyproject.toml (e2e and the paid judge lane are excluded), so it
+# NEVER collects the paid judge — no token spend, no key.
+#
+# D-02 / T-05.1-02: the paid judge (Lane 2, dims 6-9) is local/manual only. This
+# workflow deliberately wires Lane 1 only — no Anthropic API key / `secrets.*`
+# reference, no paid judge lane invocation, and no nightly/cron trigger. Keep it
+# that way: adding the key here would put a credential in CI scope.
+name: ci
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  eval-gate:
+    name: Lane 1 — free deterministic eval gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run free deterministic eval gate (Lane 1)
+        run: uv run pytest tests/eval -q
