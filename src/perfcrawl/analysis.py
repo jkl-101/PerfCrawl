@@ -346,7 +346,13 @@ def analyze_run(
     insufficient = len(error_pages)
 
     def _process(page: PageResult) -> tuple[PageResult, str, AnalysisResult | None]:
-        digest = build_digest(page)
+        # WR-01: scrub the digest BEFORE it egresses to Anthropic. A credential
+        # embedded in a measured request URL (slowest_request_url / waterfall
+        # entry.url) is a network sink just like result.json / --json stdout; the
+        # scrubber must redact it before the API call. Scrubbing here also keeps
+        # the grounding pass (which compares analysis text against `digest`)
+        # consistent with what the model actually saw.
+        digest = _scrub(build_digest(page))
         return page, digest, analyze_page(client, digest, model)
 
     # Pitfall 4: warm the cache on the FIRST page synchronously, then fan out.
