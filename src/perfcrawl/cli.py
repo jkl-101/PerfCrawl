@@ -434,7 +434,12 @@ def measure(
     # --- Render the final result on stdout (D-06). ---
     if output_json:
         # Plain sys.stdout write — Rich would inject ANSI even with no styling.
-        sys.stdout.write(run_record.model_dump_json(indent=2))
+        # WR-04: scrub --json stdout too (mirror crawl()). A piped `--json`
+        # capture is as much a sink as a file; when --ai seeded a scrubber, redact
+        # before the JSON reaches the terminal / a redirected stream. Non-AI runs
+        # keep scrub=None → identity.
+        payload = run_record.model_dump_json(indent=2)
+        sys.stdout.write(scrub(payload) if scrub else payload)
         sys.stdout.write("\n")
     else:
         _render_human_table(run_record, samples=samples, run_dir=run_dir)
