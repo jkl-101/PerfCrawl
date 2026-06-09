@@ -571,3 +571,107 @@ def test_crawl_summary_table_shows_relative_paths(
     assert "/index.html" in result.stdout
     # ...and the full per-row URL (origin + path) is truncated away.
     assert f"{origin}/index.html" not in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# AI post-pass health surfaced in the user-facing result (AI-SPEC §7 KM-3)
+#
+# analyze_run returns {analyzed, degraded, insufficient, violations}; the CLI
+# must lift those counts into the stdout summary the user reads, warning (⚠) when
+# degradation exceeds AI_DEGRADED_WARN_FRACTION or any grounding violation fired.
+# Eval-review remediation #7 (the return was previously discarded by
+# _run_ai_post_pass -> None).
+# --------------------------------------------------------------------------- #
+
+_CLEAN_VIOLATIONS = {"bare_inp": 0, "fabricated_number": 0, "out_of_evidence_entity": 0}
+
+
+def test_render_ai_health_neutral_note(capsys) -> None:
+    """All pages analyzed, no violations → a neutral note (no ⚠)."""
+    from perfcrawl.cli import _render_ai_health
+
+    _render_ai_health(
+        {"analyzed": 5, "degraded": 0, "insufficient": 1, "violations": dict(_CLEAN_VIOLATIONS)}
+    )
+    out = capsys.readouterr().out
+    assert "5 analyzed" in out
+    assert "grounding flags" in out
+    assert "⚠" not in out
+
+
+def test_render_ai_health_warns_on_grounding_violation(capsys) -> None:
+    """Any grounding violation (>0) warns regardless of the degrade fraction."""
+    from perfcrawl.cli import _render_ai_health
+
+    _render_ai_health(
+        {
+            "analyzed": 4,
+            "degraded": 0,
+            "insufficient": 0,
+            "violations": {"bare_inp": 0, "fabricated_number": 2, "out_of_evidence_entity": 0},
+        }
+    )
+    out = capsys.readouterr().out
+    assert "⚠" in out
+    assert "2 grounding flags" in out
+
+
+def test_render_ai_health_warns_on_high_degrade_fraction(capsys) -> None:
+    """Degraded > AI_DEGRADED_WARN_FRACTION of attempted pages warns (systemic failure)."""
+    from perfcrawl.cli import _render_ai_health
+
+    # 2 degraded of 4 attempted = 50% > 10% → warn.
+    _render_ai_health(
+        {"analyzed": 2, "degraded": 2, "insufficient": 0, "violations": dict(_CLEAN_VIOLATIONS)}
+    )
+    out = capsys.readouterr().out
+    assert "⚠" in out
+
+
+def test_render_ai_health_noop_without_summary(capsys) -> None:
+    """A non-AI run (summary is None) prints nothing — non-AI output is untouched."""
+    from perfcrawl.cli import _render_ai_health
+
+    _render_ai_health(None)
+    assert capsys.readouterr().out == ""
+
+
+def test_crawl_ai_surfaces_health_line(monkeypatch, tmp_path: Path, local_server: str) -> None:
+    """End-to-end: ``crawl --ai`` lifts analyze_run's summary into the stdout result.
+
+    The real client/engine is replaced at the ``_run_ai_post_pass`` seam (so no key
+    or network is needed beyond the D-10 fail-fast env check) returning a canned
+    summary; the call site must capture it and render the health line.
+    """
+    _patch_measure(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY")
+    canned = {
+        "analyzed": 1,
+        "degraded": 0,
+        "insufficient": 0,
+        "violations": dict(_CLEAN_VIOLATIONS),
+    }
+    monkeypatch.setattr("perfcrawl.cli._run_ai_post_pass", lambda *a, **k: canned)
+
+    seed = local_server + "/index.html"
+    result = runner.invoke(
+        app,
+        ["crawl", seed, "--ai", "--delay", "0", "--output-dir", str(tmp_path)],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert "1 analyzed" in result.stdout
+    assert "grounding flags" in result.stdout
+
+
+def test_crawl_without_ai_emits_no_health_line(
+    monkeypatch, tmp_path: Path, local_server: str
+) -> None:
+    """A run without ``--ai`` must not print the AI health line at all."""
+    _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app,
+        ["crawl", local_server + "/index.html", "--delay", "0", "--output-dir", str(tmp_path)],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert "analyzed ·" not in result.stdout
+    assert "grounding flags" not in result.stdout

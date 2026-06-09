@@ -42,6 +42,7 @@ from rich.table import Table
 from perfcrawl import analysis
 from perfcrawl.auth import AuthError, make_scrubber, resolve_auth_state
 from perfcrawl.constants import (
+    AI_DEGRADED_WARN_FRACTION,
     AI_MAX_RETRIES,
     AI_REQUEST_TIMEOUT_S,
     ANTHROPIC_API_KEY_ENV,
@@ -150,7 +151,7 @@ def _resolve_crawl_auth(
         _teardown_chrome(chrome, user_data_dir)
 
 
-def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> None:
+def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> dict:
     """Construct the shared ``Anthropic`` client and run the ``analyze_run`` post-pass.
 
     D-02 / D-10: invoked only when ``--ai`` is set AND the key validated at t=0, so
@@ -161,19 +162,52 @@ def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> None:
     the in-place-mutated ``analysis`` fields are redacted (AUTH-04 / T-05-redact).
     ``analyze_run`` mutates ``run_record.pages`` in place, so the unchanged
     scrub→write_outputs→write_run path serializes the populated ``analysis`` for free.
+    Returns ``analyze_run``'s per-run summary (``{"analyzed", "degraded",
+    "insufficient", "violations"}``) so the caller can surface AI health in the
+    user-facing result (AI-SPEC §7 Key Metric 3) rather than only in the stderr log.
     """
     client = anthropic.Anthropic(
         api_key=os.environ[ANTHROPIC_API_KEY_ENV],
         max_retries=AI_MAX_RETRIES,
         timeout=AI_REQUEST_TIMEOUT_S,
     )
-    analysis.analyze_run(
+    return analysis.analyze_run(
         run_record,
         client=client,
         model=ai_model,
         scrub=scrub,
         err_console=err_console,
     )
+
+
+def _render_ai_health(summary: dict | None) -> None:
+    """Surface the AI post-pass health in the user-facing result (AI-SPEC §7 KM-3).
+
+    ``analyze_run`` already logs a per-run line to stderr, but that never reached
+    the stdout summary the user actually reads — so a systemic AI failure (bad key
+    tier, model outage) or a grounding-violation spike was invisible in the result.
+    This lifts the same counts under the result table. Warns (yellow ⚠) when more
+    than ``AI_DEGRADED_WARN_FRACTION`` of the attempted pages degraded to null OR
+    any grounding violation fired; otherwise a neutral dim note. No-ops when there
+    is no summary (``--ai`` was not set), so non-AI runs are untouched. Never called
+    in ``--json`` mode (it would corrupt the JSON stream).
+    """
+    if not summary:
+        return
+    analyzed = summary.get("analyzed", 0)
+    degraded = summary.get("degraded", 0)
+    insufficient = summary.get("insufficient", 0)
+    total_violations = sum((summary.get("violations") or {}).values())
+    attempted = analyzed + degraded
+    degraded_fraction = (degraded / attempted) if attempted else 0.0
+    note = (
+        f"AI: {analyzed} analyzed · {degraded} degraded · "
+        f"{insufficient} insufficient · {total_violations} grounding flags"
+    )
+    if degraded_fraction > AI_DEGRADED_WARN_FRACTION or total_violations > 0:
+        out_console.print(f"[yellow]⚠ {note}[/yellow]")
+    else:
+        out_console.print(f"[dim]{note}[/dim]")
 
 
 # D-05 requires explicit subcommand verbs (``measure`` / ``crawl``, plus future
@@ -410,8 +444,9 @@ def measure(
     # --- D-02: AI analysis post-pass (only when --ai), AFTER measurement and BEFORE
     # output. analyze_run mutates run_record.pages in place so the write path below
     # serializes page.analysis for free; the key-seeded scrub redacts every sink.
+    ai_summary = None
     if ai:
-        _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
 
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
     try:
@@ -443,6 +478,7 @@ def measure(
         sys.stdout.write("\n")
     else:
         _render_human_table(run_record, samples=samples, run_dir=run_dir)
+        _render_ai_health(ai_summary)
     # Implicit exit 0 (D-13: success-or-partial).
 
 
@@ -794,8 +830,9 @@ def crawl(
     # store.py / models.py UNCHANGED — Phase 6 owns output formats). The key is
     # threaded through `scrub` so every analysis field + degrade/grounding log line
     # is redacted (AUTH-04 / T-05-redact).
+    ai_summary = None
     if ai:
-        _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
 
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches
     # disk. A Lighthouse HTML/JSON capture of an authenticated page (or the login
@@ -848,6 +885,7 @@ def crawl(
         sys.stdout.write("\n")
     else:
         _render_crawl_summary(run_record, samples=samples, run_dir=run_dir)
+        _render_ai_health(ai_summary)
 
     # AUTH-03 / D-06: a mid-crawl session loss flushed the already-measured
     # authenticated pages as a valid tagged-partial run (written + persisted

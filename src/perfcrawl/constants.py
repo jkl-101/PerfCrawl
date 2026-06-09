@@ -214,6 +214,13 @@ AI_REQUEST_TIMEOUT_S: float = 60.0
 # timing desc, tie-break url asc) so the cached prompt stays small + deterministic.
 AI_WATERFALL_TOP_N: int = 5
 
+# AI-SPEC §7 Key Metric 3: the user-facing crawl/measure summary warns (vs. a
+# neutral note) when more than this fraction of the attempted (analyzed+degraded)
+# pages degraded to null — a systemic AI failure (bad key tier, model outage)
+# should be visible in the result, not buried in the per-run stderr line. Any
+# grounding violation (>0) always warns regardless of this fraction.
+AI_DEGRADED_WARN_FRACTION: float = 0.10
+
 # D-10: the env var the API key is read from. Credential intake is env-only — the
 # key is NEVER a Typer Option (argv is visible in `ps`/shell history).
 ANTHROPIC_API_KEY_ENV: str = "ANTHROPIC_API_KEY"
