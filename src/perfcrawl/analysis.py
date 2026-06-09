@@ -80,7 +80,13 @@ worse than useless because it erodes trust in every other row):
 
 1. CITE THE NUMBERS. Every quantitative claim MUST cite a metric that is present
    in the digest AND its exact value as shown. Never state a number that does not
-   appear in the digest. If you want to mention a value, copy it from the digest.
+   appear in the digest. If you want to mention a value, copy it from the digest
+   VERBATIM — do NOT convert units (e.g. do not turn "2410000 bytes" into
+   "2.4 MB"), do NOT round, and do NOT compute derived figures (percentages,
+   ratios, sums). A converted or rounded number is a number that does NOT appear
+   in the digest, and it will be flagged as fabricated. Quote bytes as the raw
+   integer the digest shows, milliseconds as the integer shown, and scores as
+   shown.
 
 2. NEVER GUESS THE STACK. Do NOT name or assert any framework, library, server,
    CDN, third-party script, or specific render-blocking resource UNLESS that exact
@@ -148,10 +154,12 @@ METRIC GLOSSARY (what each digest line means):
 
 HOW TO REASON ABOUT A CAUSE. Connect a NAMED, PRESENT metric to a plausible
 mechanism using only the evidence. Good: "LCP is 4800 ms (poor); the slowest
-request is the 2.4 MB hero image at 1820 ms, which is the likely LCP element."
-That cites real digest values and names a real digest request. Bad: "LCP is slow
-because of React hydration" — the digest never mentions React, so this is a
-fabricated cause (rule 2).
+request is 2410000 bytes at 1820 ms, which is the likely LCP element." That cites
+real digest values VERBATIM (the raw byte and ms integers as shown — no "2.4 MB"
+conversion) and names a real digest request. Bad: "LCP is slow because of React
+hydration" — the digest never mentions React, so this is a fabricated cause
+(rule 2). Bad: "the 2.4 MB hero image" — "2.4" is a derived/rounded figure that
+does not appear in the digest, so it is a fabricated number (rule 1).
 
 WORKED EXAMPLE A — healthy page (do not invent a problem):
   Digest says all four scores are 90+ (e.g. Performance 98), LCP 1200 ms (good),
