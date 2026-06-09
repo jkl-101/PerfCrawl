@@ -331,6 +331,29 @@ def all_digest_pages() -> list[PageResult]:
 
 
 @pytest.fixture
+def load_gold():
+    """Load a fixture's raw ``gold`` label dict by name (mirrors ``digest_page``).
+
+    Usage: ``load_gold("slow-lcp")`` → the ``gold`` object authored beside the
+    inputs-only digest, or ``None`` for an unlabeled fixture (e.g. the
+    ``fully-null-error-row`` D-06 case).
+
+    The gold label is the human authority the LLM-judge is calibrated against
+    (Phase 5.1). It rides as a NEW top-level ``gold`` key, which ``PageResult``'s
+    ``extra="ignore"`` config drops on validation — so ``digest_page`` /
+    ``build_digest`` never see it and the byte-stability contract is preserved.
+    That is exactly why this loader reads the RAW JSON (``json.loads``) instead of
+    going through ``PageResult`` (which would discard the key).
+    """
+
+    def _load(name: str) -> dict | None:
+        path = DIGEST_FIXTURES_DIR / f"{name}.json"
+        return json.loads(path.read_text()).get("gold")
+
+    return _load
+
+
+@pytest.fixture
 def lh_404() -> dict:
     """LH 13.3.0 JSON capture of a 404 main-document (Phase 2 D-13 partial-result)."""
     return json.loads((LH_FIXTURES_DIR / "studyhalo-404.json").read_text())

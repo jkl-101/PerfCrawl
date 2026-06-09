@@ -51,5 +51,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "Total Blocking Time is 780 ms — the lab proxy for INP, not a measured field INP — which is high; LCP (2,400 ms) and CLS (0.05) are good. The heaviest scripts are /static/vendor.bundle.js (980,000 bytes, 1,340 ms) and /static/app.bundle.js (420,000 bytes, 760 ms).",
+    "potential_cause": "The large JavaScript bundles — /static/vendor.bundle.js (980,000 bytes) and /static/app.bundle.js (420,000 bytes) — are the likely source of the main-thread work driving the high TBT.",
+    "suggested_optimization": "Reduce and split the JavaScript: code-split or defer /static/vendor.bundle.js (980,000 bytes) and /static/app.bundle.js so less script parses and executes on the main thread during load.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

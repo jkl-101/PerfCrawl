@@ -51,5 +51,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "TTFB is 2,400 ms — very high. The slowest request is the main document itself, /search?q=algebra, at 2,400 ms, which accounts for nearly all of the 3,000 ms LCP. The payload is light (800,000 bytes, 30 requests) and CLS (0.04) and TBT (140 ms) are good.",
+    "potential_cause": "The server is slow to return the /search?q=algebra document (2,400 ms time-to-first-byte). The delay is server-side response time, not front-end asset weight, since the page is only 800,000 bytes across 30 requests.",
+    "suggested_optimization": "Investigate server-side response time for the search route (/search?q=algebra) — for example query or caching cost on that endpoint; the front-end payload is already light and is not the bottleneck.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 4 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

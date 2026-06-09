@@ -51,5 +51,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "CLS is 0.42, well into the poor range (>0.25), while LCP (2,300 ms) is good and the other metrics are acceptable. The notable requests are /media/banner.jpg (540,000 bytes, 640 ms) and /static/ads.js (120,000 bytes, 480 ms).",
+    "potential_cause": "The high layout shift is consistent with unsized media (/media/banner.jpg) and/or late-injected content from /static/ads.js reflowing the page after initial render. Both are present in the captured waterfall.",
+    "suggested_optimization": "Reserve explicit width/height (or an aspect-ratio box) for /media/banner.jpg and for any slot populated by /static/ads.js so they cannot shift surrounding content as they load.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 4 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

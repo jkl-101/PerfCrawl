@@ -58,5 +58,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "LCP is 4,800 ms, in the poor range (>4,000 ms), while CLS (0.03), TBT (150 ms) and TTFB (300 ms) are all good. The slowest request is /media/hero.png at 1,820 ms and 2,410,000 bytes — the single largest asset on a 3,200,000-byte page.",
+    "potential_cause": "The 2,410,000-byte hero image (/media/hero.png), loading in 1,820 ms, is very likely the LCP element or blocks it, and is the dominant contributor to the 3,200,000-byte page weight.",
+    "suggested_optimization": "Compress and resize /media/hero.png (2,410,000 bytes) into a responsive, modern-format image and consider preloading it; it is both the slowest request (1,820 ms) and the largest single asset on the page.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

@@ -58,5 +58,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "Every captured metric is in the Core Web Vitals good band: performance score 98/100, LCP 1,200 ms, CLS 0.02, TBT 90 ms (the lab INP proxy, not a real field INP), TTFB 180 ms. The page is light at 480,000 bytes across 24 requests; the slowest request is /static/app.css at 160 ms.",
+    "potential_cause": "There is nothing to diagnose: no metric is in needs-improvement or poor, and the asset budget (480,000 bytes, 24 requests) is modest. No cause is warranted.",
+    "suggested_optimization": "No optimization is needed; the page is already healthy. Maintain the current asset budget and re-check on future runs.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }
