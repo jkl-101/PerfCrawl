@@ -37,10 +37,9 @@ from pathlib import Path
 from statistics import StatisticsError
 
 import anthropic
+import calibrate as calibrate_mod  # tests/eval on sys.path (pytest prepend mode)
+import judge as judge_mod
 import pytest
-
-import calibrate as calibrate_mod  # noqa: E402 — tests/eval on sys.path (prepend mode)
-import judge as judge_mod  # noqa: E402
 
 from perfcrawl import analysis
 from perfcrawl.auth import make_scrubber
