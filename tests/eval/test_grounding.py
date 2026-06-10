@@ -215,6 +215,47 @@ def test_no_fabricated_number() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Dim 5 (insufficient-data honesty) — the OUTPUT-PHRASING half (05-EVAL-REVIEW #6).
+# The digest-signal half ships in test_digest.py (556be0a); this is the distinct
+# output half: the acceptable note SAYS "insufficient data" for the n/a metrics
+# and grounds the present ones, while a note that invents a value for an n/a
+# metric is caught by the fabricated-number detector. Deterministic, offline.
+# --------------------------------------------------------------------------- #
+
+
+def test_partial_null_output_phrasing(digest_page, load_gold) -> None:
+    """dim-5 OUTPUT half: the partial-null gold note is honest; a fabricated value is flagged.
+
+    (a) The acceptable/gold note for the ``partial-null`` page says "insufficient
+        data" (honesty phrasing) for the missing/n/a metrics AND grounds the present
+        metrics — every number it cites appears in the digest (no fabrication).
+    (b) A generated note that instead claims a concrete value for an n/a metric
+        (e.g. an LCP / Performance number the digest renders as ``n/a``) is caught
+        by ``find_fabricated_numbers`` against that same digest.
+    """
+    digest = analysis.build_digest(digest_page("partial-null"))
+    gold = load_gold("partial-null")
+    assert gold is not None, "the partial-null fixture must carry a gold label (Plan 02)"
+
+    # (a) The acceptable note is HONEST about the missing metrics...
+    observation = gold["observation"]
+    assert "insufficient data" in observation.lower(), (
+        "the partial-null gold note must say 'insufficient data' for the n/a metrics"
+    )
+    # ...and grounds the metrics it DOES cite — no number absent from the digest.
+    assert analysis.find_fabricated_numbers(observation, digest) == [], (
+        "the partial-null gold note must only cite numbers present in the digest"
+    )
+
+    # (b) A note that fabricates a value for an n/a metric (LCP/Performance are n/a
+    # in this digest) is flagged — the dim-5 failure the output phrasing must avoid.
+    fabricating_note = "Performance score is 45 and LCP is 3200 ms (poor); reduce JS."
+    fabricated = analysis.find_fabricated_numbers(fabricating_note, digest)
+    assert "3200" in fabricated, "an invented LCP for the n/a metric must be flagged"
+    assert "45" in fabricated, "an invented performance score for the n/a metric must be flagged"
+
+
+# --------------------------------------------------------------------------- #
 # AI-02: out-of-evidence entity — no framework/server/CDN absent from the digest
 # --------------------------------------------------------------------------- #
 
