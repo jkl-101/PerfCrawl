@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from perfcrawl import analysis
 from perfcrawl.auth import make_scrubber
+from perfcrawl.cli import _format_calibration_note
 from perfcrawl.models import AnalysisResult, PageResult, RunRecord
 from perfcrawl.output import write_outputs
 
@@ -150,6 +151,39 @@ def test_key_scrubbed_every_sink(tmp_path) -> None:
     persisted = json.loads(result_json)
     analysis_blob = json.dumps(persisted["pages"][0]["analysis"])
     assert TEST_KEY not in analysis_blob, "key leaked into a persisted analysis field"
+
+
+# --------------------------------------------------------------------------- #
+# AUTH-04 / T-05.1-10: the judge-lane calibration-report sink is ALSO scrubbed.
+# Distinct from test_key_scrubbed_every_sink (which exercises the analyze/write
+# path) — this proves the SECOND key-bearing lane (the paid judge's calibration
+# report surfaced by _render_ai_health) reuses the same make_scrubber.
+# --------------------------------------------------------------------------- #
+
+
+def test_key_scrubbed_judge_lane() -> None:
+    """The judge-lane calibration report passes through make_scrubber — key cannot survive.
+
+    The judge lane spends real tokens with the key, so its calibration report is a
+    distinct AUTH-04 sink from the analyze path. A calibration payload bearing the
+    fake key (standing in for any key-bearing token reaching the calibration-report
+    sink) must come back redacted when routed through ``_format_calibration_note``
+    with a key-seeded scrubber — proving the judge lane reuses the SAME scrubber, not
+    a second hand-rolled redactor.
+    """
+    scrub = make_scrubber(TEST_KEY)
+    # The fake key embedded in calibration content reaching the report sink.
+    calibration = {
+        f"causal_plausibility {TEST_KEY}": {"spearman": 0.81, "kappa": 0.74, "trusted": True},
+        "threshold_correctness": {"spearman": 0.62, "kappa": 0.55, "trusted": False},
+    }
+
+    note = _format_calibration_note(calibration, scrub=scrub)
+
+    assert note is not None, "a non-empty calibration payload must render a note"
+    assert TEST_KEY not in note, "key leaked into the judge-lane calibration report (AUTH-04 sink)"
+    # And the scrubber is genuinely engaged: an unscrubbed render WOULD carry the key.
+    assert TEST_KEY in _format_calibration_note(calibration, scrub=None)
 
 
 # --------------------------------------------------------------------------- #

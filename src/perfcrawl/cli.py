@@ -180,8 +180,45 @@ def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> dict:
     )
 
 
-def _render_ai_health(summary: dict | None) -> None:
-    """Surface the AI post-pass health in the user-facing result (AI-SPEC §7 KM-3).
+def _scrub_judge_sink(text: str, scrub) -> str:
+    """Route one judge-lane sink (prompt, stderr log, calibration report) through scrub.
+
+    The judge lane spends real tokens with ``ANTHROPIC_API_KEY``, so EVERY string it
+    emits is an AUTH-04 sink (T-05.1-10 / CR-01 "scrub every sink"). This reuses the
+    same key-seeded ``make_scrubber`` closure the analyze lane already uses (never a
+    second hand-rolled redactor); a ``None`` scrubber is identity so non-AI callers
+    are untouched.
+    """
+    return scrub(text) if scrub else text
+
+
+def _format_calibration_note(calibration: dict | None, scrub=None) -> str | None:
+    """Render the scrubbed judge-calibration note for the surfaced summary (D-03).
+
+    ``calibration`` maps each judged dimension (6-9) to its ``calibrate`` result —
+    ``{spearman, kappa, trusted}``. Returns a single note line citing each dim's
+    ``spearman``/``kappa``/``trusted`` by name (so the surfacing is a real payload
+    reference, not a stub), routed through the judge-lane scrubber (the calibration
+    report is a key-bearing sink, T-05.1-10). Returns ``None`` when no payload is
+    present, so a normal ``--ai`` run (which does not run the paid judge) is
+    untouched — the runtime judge-threading seam is intentionally NOT built (CONTEXT
+    Claude's-Discretion; this stays the calibration-report surface, D-03).
+    """
+    if not calibration:
+        return None
+    parts = []
+    for dim, result in calibration.items():
+        spearman = result.get("spearman")
+        kappa = result.get("kappa")
+        trusted = result.get("trusted")
+        spearman_s = "n/a" if spearman is None else f"{spearman:.2f}"
+        kappa_s = "n/a" if kappa is None else f"{kappa:.2f}"
+        parts.append(f"{dim} spearman={spearman_s} kappa={kappa_s} trusted={trusted}")
+    return _scrub_judge_sink("Judge calibration: " + " · ".join(parts), scrub)
+
+
+def _render_ai_health(summary: dict | None, *, calibration: dict | None = None, scrub=None) -> None:
+    """Surface the AI post-pass health in the user-facing result (AI-SPEC §7 KM-3/KM-6).
 
     ``analyze_run`` already logs a per-run line to stderr, but that never reached
     the stdout summary the user actually reads — so a systemic AI failure (bad key
@@ -191,23 +228,39 @@ def _render_ai_health(summary: dict | None) -> None:
     any grounding violation fired; otherwise a neutral dim note. No-ops when there
     is no summary (``--ai`` was not set), so non-AI runs are untouched. Never called
     in ``--json`` mode (it would corrupt the JSON stream).
+
+    When a ``calibration`` payload is threaded in (the build-and-run-once judge
+    meta-eval, D-03), its per-dim ``{spearman, kappa, trusted}`` is surfaced in the
+    SAME block following the existing warn-vs-dim convention: yellow ⚠ when ANY
+    judged dim is below the 0.70 trust bar (advisory-until-calibrated), a neutral
+    dim note when every dim is ``trusted``. The note is scrubbed (the calibration
+    report is a judge-lane key sink). This builds on the 20e50de surfaced summary —
+    it does NOT re-architect it (D-05).
     """
-    if not summary:
-        return
-    analyzed = summary.get("analyzed", 0)
-    degraded = summary.get("degraded", 0)
-    insufficient = summary.get("insufficient", 0)
-    total_violations = sum((summary.get("violations") or {}).values())
-    attempted = analyzed + degraded
-    degraded_fraction = (degraded / attempted) if attempted else 0.0
-    note = (
-        f"AI: {analyzed} analyzed · {degraded} degraded · "
-        f"{insufficient} insufficient · {total_violations} grounding flags"
-    )
-    if degraded_fraction > AI_DEGRADED_WARN_FRACTION or total_violations > 0:
-        out_console.print(f"[yellow]⚠ {note}[/yellow]")
-    else:
-        out_console.print(f"[dim]{note}[/dim]")
+    if summary:
+        analyzed = summary.get("analyzed", 0)
+        degraded = summary.get("degraded", 0)
+        insufficient = summary.get("insufficient", 0)
+        total_violations = sum((summary.get("violations") or {}).values())
+        attempted = analyzed + degraded
+        degraded_fraction = (degraded / attempted) if attempted else 0.0
+        note = (
+            f"AI: {analyzed} analyzed · {degraded} degraded · "
+            f"{insufficient} insufficient · {total_violations} grounding flags"
+        )
+        if degraded_fraction > AI_DEGRADED_WARN_FRACTION or total_violations > 0:
+            out_console.print(f"[yellow]⚠ {note}[/yellow]")
+        else:
+            out_console.print(f"[dim]{note}[/dim]")
+
+    calibration_note = _format_calibration_note(calibration, scrub=scrub)
+    if calibration_note is not None:
+        # Advisory-until-calibrated: ANY untrusted judged dim warns; all-trusted is dim.
+        any_untrusted = any(not result.get("trusted") for result in calibration.values())
+        if any_untrusted:
+            out_console.print(f"[yellow]⚠ {calibration_note}[/yellow]")
+        else:
+            out_console.print(f"[dim]{calibration_note}[/dim]")
 
 
 # D-05 requires explicit subcommand verbs (``measure`` / ``crawl``, plus future
@@ -478,7 +531,8 @@ def measure(
         sys.stdout.write("\n")
     else:
         _render_human_table(run_record, samples=samples, run_dir=run_dir)
-        _render_ai_health(ai_summary)
+        # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
+        _render_ai_health(ai_summary, scrub=scrub)
     # Implicit exit 0 (D-13: success-or-partial).
 
 
@@ -885,7 +939,8 @@ def crawl(
         sys.stdout.write("\n")
     else:
         _render_crawl_summary(run_record, samples=samples, run_dir=run_dir)
-        _render_ai_health(ai_summary)
+        # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
+        _render_ai_health(ai_summary, scrub=scrub)
 
     # AUTH-03 / D-06: a mid-crawl session loss flushed the already-measured
     # authenticated pages as a valid tagged-partial run (written + persisted
