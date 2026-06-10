@@ -51,5 +51,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "Every Core Web Vital sits exactly on the good boundary: LCP 2,500 ms (good is ≤2,500 ms), CLS 0.10 (good is ≤0.10), and TBT 200 ms (good is ≤200 ms) are all at or under the good threshold, so all three classify as good. TTFB is 800 ms, the page makes 37 requests for 1,234,567 bytes, and the slowest request is /static/pricing.js at 789 ms / 256,000 bytes.",
+    "potential_cause": "Nothing falls in the needs-improvement or poor range — every metric is at or under its good cutoff — so there is no performance problem to diagnose.",
+    "suggested_optimization": "No urgent action is warranted: the metrics sit right at the good boundary. At most, keep an eye on the heaviest asset (/static/pricing.js, 256,000 bytes / 789 ms) in case it grows, but no fix is needed on a 1,234,567-byte page that is already within all good thresholds.",
+    "dimensions": {
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

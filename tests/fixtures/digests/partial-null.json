@@ -34,5 +34,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "Performance score, LCP, and TBT were not captured — these are insufficient data / unavailable for this page. The metrics that were captured are healthy: CLS 0.06 (good) and TTFB 220 ms, across 28 requests for 600,000 bytes, with the slowest request /static/profile.js at 410 ms.",
+    "potential_cause": "With load speed (LCP), performance score, and blocking time (TBT) all missing, no load-time conclusion can be drawn. The metrics that were captured — CLS and TTFB — are healthy.",
+    "suggested_optimization": "Re-measure to capture the missing metrics (performance score, LCP, TBT) before recommending any load-time fix. Nothing is actionable from the partial data alone.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 4 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }

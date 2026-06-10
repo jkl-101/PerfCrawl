@@ -58,5 +58,16 @@
     }
   ],
   "diagnostics": null,
-  "analysis": null
+  "analysis": null,
+  "gold": {
+    "observation": "LCP is 3,500 ms (needs improvement), CLS is 0.05 (good), TBT is 300 ms, and TTFB is 1,200 ms (high). The page makes 60 requests for 2,000,000 bytes. The slowest request is /static/main.js at 980 ms / 540,000 bytes, followed by /static/main.css at 320 ms, and the /enroll document itself responds in 1,200 ms.",
+    "potential_cause": "The contributors are the requests actually present in the data: the slow /static/main.js (980 ms / 540,000 bytes) and the 1,200 ms server response on the /enroll document. No framework, server, or CDN — React, Django, nginx, or otherwise — can be inferred from these metrics, and none is asserted.",
+    "suggested_optimization": "Reduce or defer /static/main.js (980 ms / 540,000 bytes) and investigate the 1,200 ms server response on the /enroll document. Recommendations stay grounded in the measured requests, not in any guessed technology stack.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  }
 }
