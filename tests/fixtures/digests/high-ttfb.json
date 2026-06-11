@@ -1,0 +1,89 @@
+{
+  "url": "https://www.studyhalo.com/search",
+  "url_key": "https://www.studyhalo.com/search",
+  "perf_score": 65.0,
+  "a11y_score": 94.0,
+  "seo_score": 91.0,
+  "best_practices_score": 92.0,
+  "lcp_ms": {
+    "median": 3000.0,
+    "samples": [
+      3000.0
+    ]
+  },
+  "cls": {
+    "median": 0.04,
+    "samples": [
+      0.04
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 140.0,
+    "samples": [
+      140.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 2400.0,
+    "samples": [
+      2400.0
+    ]
+  },
+  "request_count": 30,
+  "total_bytes": 800000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/search?q=algebra",
+  "slowest_request_ms": 2400.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/search?q=algebra",
+      "resource_type": "document",
+      "size_bytes": 36000,
+      "timing_ms": 2400.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.js",
+      "resource_type": "script",
+      "size_bytes": 180000,
+      "timing_ms": 320.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "TTFB is 2,400 ms — very high. The slowest request is the main document itself, /search?q=algebra, at 2,400 ms, which accounts for nearly all of the 3,000 ms LCP. The payload is light (800,000 bytes, 30 requests) and CLS (0.04) and TBT (140 ms) are good.",
+    "potential_cause": "The server is slow to return the /search?q=algebra document (2,400 ms time-to-first-byte). The delay is server-side response time, not front-end asset weight, since the page is only 800,000 bytes across 30 requests.",
+    "suggested_optimization": "Investigate server-side response time for the search route (/search?q=algebra) — for example query or caching cost on that endpoint; the front-end payload is already light and is not the bottleneck.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 4 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "The 800,000-byte payload is too heavy and the page's images are dragging down load time for users.",
+    "potential_cause": "Large unoptimized images and a bloated React bundle are slowing the page's first render.",
+    "suggested_optimization": "Compress images, lazy-load below-the-fold content, and minify the JavaScript.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}

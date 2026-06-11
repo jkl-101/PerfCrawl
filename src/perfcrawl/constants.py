@@ -177,3 +177,96 @@ REDACTION_PLACEHOLDER: str = "***REDACTED***"
 # post-submit load before evaluating the success heuristic. Playwright takes
 # milliseconds; this is the explicit upper bound passed to wait_for_load_state.
 LOGIN_WAIT_TIMEOUT_MS: int = 15_000
+
+
+# --- Phase 5 AI analysis constants (D-07/D-08/D-03/D-11) --------------------
+# The ONE editable place for every Phase-5 AI literal. `analysis.py` and the CLI
+# `--ai`/`--ai-model` flags import from HERE — never inline a model id, pool cap,
+# retry count, token bound, timeout, the waterfall-N, or the env-var name.
+# Phase 1 grep-asserts this discipline for TRACKING_PARAM_DENYLIST; Phase 5
+# extends it to these.
+
+# D-07: bulk default model — Sonnet is the cost-appropriate synthesis tier and a
+# T-05-cost guard (NOT Opus by default). Override per-run via `--ai-model`.
+DEFAULT_AI_MODEL: str = "claude-sonnet-4-6"
+
+# D-07/D-08: the escalation tier reached via `--ai-model claude-opus-4-8` for
+# small high-value crawls. MUST be 4-8 — `claude-opus-4-7` is superseded and is
+# the value the older CLAUDE.md/AI-SPEC notes carried; never copy it forward.
+AI_OPUS_MODEL: str = "claude-opus-4-8"
+
+# D-03: analyze-pool worker cap. Network-bound, so intentionally DECOUPLED from
+# DEFAULT_CONCURRENCY (the Chrome pool, one heavyweight browser per worker).
+AI_POOL_SIZE: int = 4
+
+# D-11: SDK `max_retries` (its own default is 2). Set HERE so the retry budget is
+# the one editable place; the SDK does the exponential backoff (no hand-rolled loop).
+AI_MAX_RETRIES: int = 2
+
+# AI-SPEC §4: per-call output bound (three short fields) + a T-05-cost runaway guard.
+AI_MAX_TOKENS: int = 600
+
+# Phase 05.1 judge output bound. Deliberately HIGHER than AI_MAX_TOKENS (600): the
+# judge emits four per-dimension verdicts (PASS/FAIL + 1-5 score + <=400-char
+# rationale each), not the generator's single O/C/O triple, so it needs more room
+# before a max_tokens truncation degrades a pair to None. The judge imports THIS —
+# never inline the bound in tests/eval/judge.py (FM single-source-of-truth).
+JUDGE_MAX_TOKENS: int = 800
+
+# AI-SPEC §4: per-client request timeout, below the SDK's 10-min default so a hung
+# call degrades a page promptly instead of stalling the analyze pool.
+AI_REQUEST_TIMEOUT_S: float = 60.0
+
+# D-04: cap the per-page digest waterfall at the top-N slowest entries (sorted by
+# timing desc, tie-break url asc) so the cached prompt stays small + deterministic.
+AI_WATERFALL_TOP_N: int = 5
+
+# AI-SPEC §7 Key Metric 3: the user-facing crawl/measure summary warns (vs. a
+# neutral note) when more than this fraction of the attempted (analyzed+degraded)
+# pages degraded to null — a systemic AI failure (bad key tier, model outage)
+# should be visible in the result, not buried in the per-run stderr line. Any
+# grounding violation (>0) always warns regardless of this fraction.
+AI_DEGRADED_WARN_FRACTION: float = 0.10
+
+# D-10: the env var the API key is read from. Credential intake is env-only — the
+# key is NEVER a Typer Option (argv is visible in `ps`/shell history).
+ANTHROPIC_API_KEY_ENV: str = "ANTHROPIC_API_KEY"
+
+# D-10 / ExitCode decision (RESEARCH A2): the missing-key fail-fast REUSES the
+# existing `ExitCode.USER_ERROR = 1` (its docstring already covers "bad flags") —
+# NO new ExitCode member is added. A missing key on `--ai` is a user-invocation
+# error, not a measurement/auth failure; `case $? in 1) fix invocation ;; esac`.
+
+
+# --- Phase 05.1 eval band cutoffs (AI-SPEC §4 / FM-5 single-source-of-truth) -
+# The deterministic dim-7 CWV band pre-flag classifies each page's LCP/CLS into
+# the web.dev Core Web Vitals bands BEFORE the paid judge spends a token. These
+# four cutoffs MUST stay byte-identical to the numbers frozen in
+# ``analysis.RUBRIC`` lines 131-139 ("LCP … GOOD <= 2500 ms … POOR > 4000 ms";
+# "CLS … GOOD <= 0.1 … POOR > 0.25"). FM-5: the pre-flag and the judge can never
+# disagree on a band — ``tests/eval/test_band_preflag.py`` grep-asserts the
+# equality against the rubric text. To move a band, edit BOTH this constant and
+# the rubric glossary in the same change.
+LCP_GOOD_MS: int = 2500  # web.dev: LCP <= 2500 ms is GOOD
+LCP_POOR_MS: int = 4000  # web.dev: LCP > 4000 ms is POOR
+CLS_GOOD: float = 0.1  # web.dev: CLS <= 0.1 is GOOD
+CLS_POOR: float = 0.25  # web.dev: CLS > 0.25 is POOR
+
+
+def cwv_band(value: float | None, good: float, poor: float) -> str:
+    """Classify a Core Web Vital value into its web.dev band (pure, None-safe).
+
+    Returns ``"n/a"`` when ``value`` is None (insufficient data — never raises,
+    matching the grounding pure-fn discipline), ``"good"`` when
+    ``value <= good`` (inclusive), ``"needs-improvement"`` when
+    ``value <= poor``, else ``"poor"``. The inclusive lower bound makes a value
+    sitting exactly on the GOOD cutoff (e.g. LCP 2500 ms, CLS 0.1) classify as
+    good — matching the rubric's ``GOOD <= 2500 ms`` / ``GOOD <= 0.1`` wording.
+    """
+    if value is None:
+        return "n/a"
+    if value <= good:
+        return "good"
+    if value <= poor:
+        return "needs-improvement"
+    return "poor"

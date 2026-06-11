@@ -1,0 +1,89 @@
+{
+  "url": "https://www.studyhalo.com/blog/launch",
+  "url_key": "https://www.studyhalo.com/blog/launch",
+  "perf_score": 70.0,
+  "a11y_score": 95.0,
+  "seo_score": 93.0,
+  "best_practices_score": 90.0,
+  "lcp_ms": {
+    "median": 2300.0,
+    "samples": [
+      2300.0
+    ]
+  },
+  "cls": {
+    "median": 0.42,
+    "samples": [
+      0.42
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 120.0,
+    "samples": [
+      120.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 250.0,
+    "samples": [
+      250.0
+    ]
+  },
+  "request_count": 35,
+  "total_bytes": 900000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/media/banner.jpg",
+  "slowest_request_ms": 640.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/media/banner.jpg",
+      "resource_type": "image",
+      "size_bytes": 540000,
+      "timing_ms": 640.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/ads.js",
+      "resource_type": "script",
+      "size_bytes": 120000,
+      "timing_ms": 480.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "CLS is 0.42, well into the poor range (>0.25), while LCP (2,300 ms) is good and the other metrics are acceptable. The notable requests are /media/banner.jpg (540,000 bytes, 640 ms) and /static/ads.js (120,000 bytes, 480 ms).",
+    "potential_cause": "The high layout shift is consistent with unsized media (/media/banner.jpg) and/or late-injected content from /static/ads.js reflowing the page after initial render. Both are present in the captured waterfall.",
+    "suggested_optimization": "Reserve explicit width/height (or an aspect-ratio box) for /media/banner.jpg and for any slot populated by /static/ads.js so they cannot shift surrounding content as they load.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 4 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "LCP at 2,300 ms is the main concern — the page renders its hero too slowly — while the rest of the metrics look fine.",
+    "potential_cause": "A slow Vue.js mount and an under-provisioned Kubernetes pod are delaying the largest contentful paint.",
+    "suggested_optimization": "Preload the hero image, defer scripts, and scale up the server to fix the LCP.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}

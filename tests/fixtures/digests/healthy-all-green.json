@@ -1,0 +1,96 @@
+{
+  "url": "https://www.studyhalo.com/",
+  "url_key": "https://www.studyhalo.com/",
+  "perf_score": 98.0,
+  "a11y_score": 100.0,
+  "seo_score": 95.0,
+  "best_practices_score": 100.0,
+  "lcp_ms": {
+    "median": 1200.0,
+    "samples": [
+      1200.0
+    ]
+  },
+  "cls": {
+    "median": 0.02,
+    "samples": [
+      0.02
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 90.0,
+    "samples": [
+      90.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 180.0,
+    "samples": [
+      180.0
+    ]
+  },
+  "request_count": 24,
+  "total_bytes": 480000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/app.css",
+  "slowest_request_ms": 160.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/app.css",
+      "resource_type": "stylesheet",
+      "size_bytes": 42000,
+      "timing_ms": 160.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.js",
+      "resource_type": "script",
+      "size_bytes": 88000,
+      "timing_ms": 140.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/",
+      "resource_type": "document",
+      "size_bytes": 18000,
+      "timing_ms": 120.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "Every captured metric is in the Core Web Vitals good band: performance score 98/100, LCP 1,200 ms, CLS 0.02, TBT 90 ms (the lab INP proxy, not a real field INP), TTFB 180 ms. The page is light at 480,000 bytes across 24 requests; the slowest request is /static/app.css at 160 ms.",
+    "potential_cause": "There is nothing to diagnose: no metric is in needs-improvement or poor, and the asset budget (480,000 bytes, 24 requests) is modest. No cause is warranted.",
+    "suggested_optimization": "No optimization is needed; the page is already healthy. Maintain the current asset budget and re-check on future runs.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "Despite the 98 performance score, the 1,200 ms LCP shows the page is loading slowly and users will notice the delay before content appears.",
+    "potential_cause": "The Angular framework's change-detection cycle and a cold CDN cache are the likely culprits behind the slow render.",
+    "suggested_optimization": "Lazy-load images, reduce third-party scripts, and tune the cache to improve perceived load speed.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
+  }
+}

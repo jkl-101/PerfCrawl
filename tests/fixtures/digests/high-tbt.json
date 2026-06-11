@@ -1,0 +1,89 @@
+{
+  "url": "https://www.studyhalo.com/dashboard",
+  "url_key": "https://www.studyhalo.com/dashboard",
+  "perf_score": 60.0,
+  "a11y_score": 90.0,
+  "seo_score": 88.0,
+  "best_practices_score": 85.0,
+  "lcp_ms": {
+    "median": 2400.0,
+    "samples": [
+      2400.0
+    ]
+  },
+  "cls": {
+    "median": 0.05,
+    "samples": [
+      0.05
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 780.0,
+    "samples": [
+      780.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 280.0,
+    "samples": [
+      280.0
+    ]
+  },
+  "request_count": 55,
+  "total_bytes": 1500000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/vendor.bundle.js",
+  "slowest_request_ms": 1340.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/vendor.bundle.js",
+      "resource_type": "script",
+      "size_bytes": 980000,
+      "timing_ms": 1340.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/app.bundle.js",
+      "resource_type": "script",
+      "size_bytes": 420000,
+      "timing_ms": 760.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "Total Blocking Time is 780 ms — the lab proxy for INP, not a measured field INP — which is high; LCP (2,400 ms) and CLS (0.05) are good. The heaviest scripts are /static/vendor.bundle.js (980,000 bytes, 1,340 ms) and /static/app.bundle.js (420,000 bytes, 760 ms).",
+    "potential_cause": "The large JavaScript bundles — /static/vendor.bundle.js (980,000 bytes) and /static/app.bundle.js (420,000 bytes) — are the likely source of the main-thread work driving the high TBT.",
+    "suggested_optimization": "Reduce and split the JavaScript: code-split or defer /static/vendor.bundle.js (980,000 bytes) and /static/app.bundle.js so less script parses and executes on the main thread during load.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "CLS 0.05 is causing visible layout jank and is the page's biggest issue; everything else looks healthy.",
+    "potential_cause": "A poorly tuned Next.js hydration pass and a slow Varnish cache layer are to blame for the instability.",
+    "suggested_optimization": "Stabilize the layout, optimize images, and enable better caching across the stack.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}

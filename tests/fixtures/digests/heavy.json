@@ -1,0 +1,96 @@
+{
+  "url": "https://www.studyhalo.com/gallery",
+  "url_key": "https://www.studyhalo.com/gallery",
+  "perf_score": 45.0,
+  "a11y_score": 88.0,
+  "seo_score": 85.0,
+  "best_practices_score": 80.0,
+  "lcp_ms": {
+    "median": 3800.0,
+    "samples": [
+      3800.0
+    ]
+  },
+  "cls": {
+    "median": 0.08,
+    "samples": [
+      0.08
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 350.0,
+    "samples": [
+      350.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 400.0,
+    "samples": [
+      400.0
+    ]
+  },
+  "request_count": 180,
+  "total_bytes": 6500000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/media/gallery-01.jpg",
+  "slowest_request_ms": 1450.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/media/gallery-01.jpg",
+      "resource_type": "image",
+      "size_bytes": 1800000,
+      "timing_ms": 1450.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/media/gallery-02.jpg",
+      "resource_type": "image",
+      "size_bytes": 1600000,
+      "timing_ms": 1280.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/media/gallery-03.jpg",
+      "resource_type": "image",
+      "size_bytes": 1400000,
+      "timing_ms": 1110.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "The page is very heavy: 6,500,000 bytes across 180 requests, with a performance score of 45/100 and LCP of 3,800 ms (needs improvement). The largest assets are gallery images — /media/gallery-01.jpg (1,800,000 bytes, 1,450 ms), /media/gallery-02.jpg (1,600,000 bytes) and /media/gallery-03.jpg (1,400,000 bytes). CLS (0.08) is good.",
+    "potential_cause": "The large gallery JPEGs (three images of 1,400,000-1,800,000 bytes each) dominate the 6,500,000-byte page weight and inflate the 180-request count, driving the slow load and the elevated LCP.",
+    "suggested_optimization": "Compress and resize the gallery JPEGs (e.g. /media/gallery-01.jpg at 1,800,000 bytes) to modern formats and lazy-load off-screen images to cut the 6,500,000-byte / 180-request budget.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 4 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "CLS at 0.08 is the headline problem and is shifting the layout; the load otherwise looks acceptable for a page of this kind.",
+    "potential_cause": "A bloated React component tree and an overworked Express backend are causing the instability and the render delay.",
+    "suggested_optimization": "Reduce layout shifts, optimize your JavaScript, and improve server response times.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}

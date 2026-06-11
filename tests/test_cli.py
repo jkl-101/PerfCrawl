@@ -165,6 +165,22 @@ def test_exit_one_when_output_dir_unwriteable(
     assert result.exit_code == ExitCode.USER_ERROR
 
 
+def test_measure_ai_requires_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """D-10: ``measure <url> --ai`` with no ``ANTHROPIC_API_KEY`` fails fast.
+
+    The fail-fast must exit ``ExitCode.USER_ERROR`` (1) at t=0 — BEFORE measure_url
+    launches Chrome — so a missing key never costs a measurement. With the measure
+    seam patched to a call-recorder, the recorder must show ZERO calls.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app, ["measure", "https://example.com", "--ai", "--output-dir", str(tmp_path)]
+    )
+    assert result.exit_code == ExitCode.USER_ERROR, result.stdout + result.stderr
+    assert calls == [], "measurement must never run on the D-10 fail-fast"
+
+
 # --------------------------------------------------------------------------- #
 # --json flag (D-06): stdout is parseable JSON; stderr carries progress.
 # --------------------------------------------------------------------------- #

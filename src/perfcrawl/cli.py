@@ -33,14 +33,21 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import anthropic
 import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from perfcrawl import analysis
 from perfcrawl.auth import AuthError, make_scrubber, resolve_auth_state
 from perfcrawl.constants import (
+    AI_DEGRADED_WARN_FRACTION,
+    AI_MAX_RETRIES,
+    AI_REQUEST_TIMEOUT_S,
+    ANTHROPIC_API_KEY_ENV,
     CRAWLER_USER_AGENT,
+    DEFAULT_AI_MODEL,
     DEFAULT_CONCURRENCY,
     DEFAULT_CRAWL_SAMPLES_N,
     DEFAULT_MAX_DEPTH,
@@ -142,6 +149,118 @@ def _resolve_crawl_auth(
         )
     finally:
         _teardown_chrome(chrome, user_data_dir)
+
+
+def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> dict:
+    """Construct the shared ``Anthropic`` client and run the ``analyze_run`` post-pass.
+
+    D-02 / D-10: invoked only when ``--ai`` is set AND the key validated at t=0, so
+    ``os.environ[ANTHROPIC_API_KEY_ENV]`` is guaranteed present here. One client is
+    shared across the bounded analyze pool (AI-SPEC Pitfall 4); the SDK owns retry
+    (``max_retries``) and per-request timeout — never a hand-rolled loop (D-11). The
+    key-seeded ``scrub`` is threaded in so every degrade/grounding stderr line and
+    the in-place-mutated ``analysis`` fields are redacted (AUTH-04 / T-05-redact).
+    ``analyze_run`` mutates ``run_record.pages`` in place, so the unchanged
+    scrub→write_outputs→write_run path serializes the populated ``analysis`` for free.
+    Returns ``analyze_run``'s per-run summary (``{"analyzed", "degraded",
+    "insufficient", "violations"}``) so the caller can surface AI health in the
+    user-facing result (AI-SPEC §7 Key Metric 3) rather than only in the stderr log.
+    """
+    client = anthropic.Anthropic(
+        api_key=os.environ[ANTHROPIC_API_KEY_ENV],
+        max_retries=AI_MAX_RETRIES,
+        timeout=AI_REQUEST_TIMEOUT_S,
+    )
+    return analysis.analyze_run(
+        run_record,
+        client=client,
+        model=ai_model,
+        scrub=scrub,
+        err_console=err_console,
+    )
+
+
+def _scrub_judge_sink(text: str, scrub) -> str:
+    """Route one judge-lane sink (prompt, stderr log, calibration report) through scrub.
+
+    The judge lane spends real tokens with ``ANTHROPIC_API_KEY``, so EVERY string it
+    emits is an AUTH-04 sink (T-05.1-10 / CR-01 "scrub every sink"). This reuses the
+    same key-seeded ``make_scrubber`` closure the analyze lane already uses (never a
+    second hand-rolled redactor); a ``None`` scrubber is identity so non-AI callers
+    are untouched.
+    """
+    return scrub(text) if scrub else text
+
+
+def _format_calibration_note(calibration: dict | None, scrub=None) -> str | None:
+    """Render the scrubbed judge-calibration note for the surfaced summary (D-03).
+
+    ``calibration`` maps each judged dimension (6-9) to its ``calibrate`` result —
+    ``{spearman, kappa, trusted}``. Returns a single note line citing each dim's
+    ``spearman``/``kappa``/``trusted`` by name (so the surfacing is a real payload
+    reference, not a stub), routed through the judge-lane scrubber (the calibration
+    report is a key-bearing sink, T-05.1-10). Returns ``None`` when no payload is
+    present, so a normal ``--ai`` run (which does not run the paid judge) is
+    untouched — the runtime judge-threading seam is intentionally NOT built (CONTEXT
+    Claude's-Discretion; this stays the calibration-report surface, D-03).
+    """
+    if not calibration:
+        return None
+    parts = []
+    for dim, result in calibration.items():
+        spearman = result.get("spearman")
+        kappa = result.get("kappa")
+        trusted = result.get("trusted")
+        spearman_s = "n/a" if spearman is None else f"{spearman:.2f}"
+        kappa_s = "n/a" if kappa is None else f"{kappa:.2f}"
+        parts.append(f"{dim} spearman={spearman_s} kappa={kappa_s} trusted={trusted}")
+    return _scrub_judge_sink("Judge calibration: " + " · ".join(parts), scrub)
+
+
+def _render_ai_health(summary: dict | None, *, calibration: dict | None = None, scrub=None) -> None:
+    """Surface the AI post-pass health in the user-facing result (AI-SPEC §7 KM-3/KM-6).
+
+    ``analyze_run`` already logs a per-run line to stderr, but that never reached
+    the stdout summary the user actually reads — so a systemic AI failure (bad key
+    tier, model outage) or a grounding-violation spike was invisible in the result.
+    This lifts the same counts under the result table. Warns (yellow ⚠) when more
+    than ``AI_DEGRADED_WARN_FRACTION`` of the attempted pages degraded to null OR
+    any grounding violation fired; otherwise a neutral dim note. No-ops when there
+    is no summary (``--ai`` was not set), so non-AI runs are untouched. Never called
+    in ``--json`` mode (it would corrupt the JSON stream).
+
+    When a ``calibration`` payload is threaded in (the build-and-run-once judge
+    meta-eval, D-03), its per-dim ``{spearman, kappa, trusted}`` is surfaced in the
+    SAME block following the existing warn-vs-dim convention: yellow ⚠ when ANY
+    judged dim is below the 0.70 trust bar (advisory-until-calibrated), a neutral
+    dim note when every dim is ``trusted``. The note is scrubbed (the calibration
+    report is a judge-lane key sink). This builds on the 20e50de surfaced summary —
+    it does NOT re-architect it (D-05).
+    """
+    if summary:
+        analyzed = summary.get("analyzed", 0)
+        degraded = summary.get("degraded", 0)
+        insufficient = summary.get("insufficient", 0)
+        total_violations = sum((summary.get("violations") or {}).values())
+        attempted = analyzed + degraded
+        degraded_fraction = (degraded / attempted) if attempted else 0.0
+        note = (
+            f"AI: {analyzed} analyzed · {degraded} degraded · "
+            f"{insufficient} insufficient · {total_violations} grounding flags"
+        )
+        if degraded_fraction > AI_DEGRADED_WARN_FRACTION or total_violations > 0:
+            out_console.print(f"[yellow]⚠ {note}[/yellow]")
+        else:
+            out_console.print(f"[dim]{note}[/dim]")
+
+    calibration_note = _format_calibration_note(calibration, scrub=scrub)
+    if calibration_note is not None:
+        # Advisory-until-calibrated: ANY untrusted judged dim warns; all-trusted is dim.
+        any_untrusted = any(not result.get("trusted") for result in calibration.values())
+        if any_untrusted:
+            out_console.print(f"[yellow]⚠ {calibration_note}[/yellow]")
+        else:
+            out_console.print(f"[dim]{calibration_note}[/dim]")
 
 
 # D-05 requires explicit subcommand verbs (``measure`` / ``crawl``, plus future
@@ -320,6 +439,19 @@ def measure(
         "--emulation",
         help="mobile | desktop (D-02 form factor).",
     ),
+    ai: bool = typer.Option(
+        False,
+        "--ai",
+        help="Run AI analysis on the measured page (D-01). Requires "
+        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
+        "in ps/history; D-10).",
+    ),
+    ai_model: str = typer.Option(
+        DEFAULT_AI_MODEL,
+        "--ai-model",
+        help="Anthropic model for --ai analysis (default: the cost-appropriate "
+        "bulk model; override with e.g. claude-opus-4-8).",
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -332,6 +464,26 @@ def measure(
     ),
 ) -> None:
     """Measure ``URL`` end-to-end: Chrome → LH → outputs → SQLite → stdout."""
+    # --- D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never
+    # a flag). Fail fast at t=0 — BEFORE measure_url launches Chrome — so a missing
+    # key never costs a measurement. Read AFTER the .env load so a key in a
+    # gitignored .env counts (mirrors crawl()).
+    if ai:
+        _load_dotenv_if_present()
+        if not os.environ.get(ANTHROPIC_API_KEY_ENV):
+            err_console.print(
+                "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
+                "never a flag"
+            )
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+    # AUTH-04 / RESEARCH Pitfall 5: measure() had NO scrubber. When --ai is set the
+    # ANTHROPIC_API_KEY becomes a secret that can leak into the measure output path
+    # (result.json, --json stdout, the analysis fields), so seed a key-only scrubber
+    # and thread it into write_outputs. A non-AI measure run keeps the prior
+    # behavior (scrub=None → identity in write_outputs).
+    scrub = make_scrubber(os.environ.get(ANTHROPIC_API_KEY_ENV)) if ai else None
+
     # --- D-15 USER_ERROR arm (input validation, before any subprocess) ---
     try:
         run_record, raw_artifacts = measure_url(url=url, samples=samples, emulation=emulation)
@@ -342,9 +494,18 @@ def measure(
         err_console.print(f"[red]measurement failed:[/red] {e}")
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR)) from None
 
+    # --- D-02: AI analysis post-pass (only when --ai), AFTER measurement and BEFORE
+    # output. analyze_run mutates run_record.pages in place so the write path below
+    # serializes page.analysis for free; the key-seeded scrub redacts every sink.
+    ai_summary = None
+    if ai:
+        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
     try:
-        run_dir = write_outputs(run_record, output_dir=output_dir, raw_artifacts=raw_artifacts)
+        run_dir = write_outputs(
+            run_record, output_dir=output_dir, raw_artifacts=raw_artifacts, scrub=scrub
+        )
     except OSError as e:
         err_console.print(f"[red]error:[/red] cannot write to {output_dir}: {e}")
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
@@ -361,10 +522,17 @@ def measure(
     # --- Render the final result on stdout (D-06). ---
     if output_json:
         # Plain sys.stdout write — Rich would inject ANSI even with no styling.
-        sys.stdout.write(run_record.model_dump_json(indent=2))
+        # WR-04: scrub --json stdout too (mirror crawl()). A piped `--json`
+        # capture is as much a sink as a file; when --ai seeded a scrubber, redact
+        # before the JSON reaches the terminal / a redirected stream. Non-AI runs
+        # keep scrub=None → identity.
+        payload = run_record.model_dump_json(indent=2)
+        sys.stdout.write(scrub(payload) if scrub else payload)
         sys.stdout.write("\n")
     else:
         _render_human_table(run_record, samples=samples, run_dir=run_dir)
+        # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
+        _render_ai_health(ai_summary, scrub=scrub)
     # Implicit exit 0 (D-13: success-or-partial).
 
 
@@ -475,6 +643,19 @@ def crawl(
         "--emulation",
         help="mobile | desktop (D-02 form factor).",
     ),
+    ai: bool = typer.Option(
+        False,
+        "--ai",
+        help="Run per-page AI analysis after measurement (D-01). Requires "
+        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
+        "in ps/history; D-10).",
+    ),
+    ai_model: str = typer.Option(
+        DEFAULT_AI_MODEL,
+        "--ai-model",
+        help="Anthropic model for --ai analysis (default: the cost-appropriate "
+        "bulk model; override with e.g. claude-opus-4-8 for small high-value crawls).",
+    ),
     output_dir: Path = typer.Option(
         Path("output"),
         "--output-dir",
@@ -521,10 +702,25 @@ def crawl(
     username = os.environ.get(PERFCRAWL_USERNAME_ENV)
     password = os.environ.get(PERFCRAWL_PASSWORD_ENV)
 
-    # Seed the central credential scrubber ONCE (D-07). Applied to every sink
-    # (stderr, RunRecord JSON, LH artifacts) so no credential ever lands in a log
-    # or on disk. Empty/None secrets are filtered by make_scrubber (no-op scrub).
-    scrub = make_scrubber(username, password)
+    # D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never a
+    # flag — argv is visible in ps/history). Fail fast at t=0 (USER_ERROR, reusing
+    # the "bad flags" band), BEFORE discovery or any measurement, so a missing key
+    # never produces a silent no-op crawl. Read AFTER the .env load above so a key
+    # in a gitignored .env counts. The error text carries no secret (the key is
+    # absent), but route nothing sensitive through it regardless.
+    if ai and not os.environ.get(ANTHROPIC_API_KEY_ENV):
+        err_console.print(
+            "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
+            "never a flag"
+        )
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+    # Seed the central credential scrubber ONCE (D-07 / AUTH-04). Applied to every
+    # sink (stderr, RunRecord JSON, result.csv, --json stdout, LH artifacts, AND
+    # the AI analysis fields) so no credential ever lands in a log or on disk. The
+    # ANTHROPIC_API_KEY is seeded as a third secret (T-05-redact) so it too is
+    # redacted at every sink; a None key (non-AI run) is a filtered no-op.
+    scrub = make_scrubber(username, password, os.environ.get(ANTHROPIC_API_KEY_ENV))
 
     success_rule: dict[str, str] | None = None
     if success_text:
@@ -681,6 +877,17 @@ def crawl(
             )
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
 
+    # --- D-02: AI analysis post-pass (only when --ai; runs AFTER measurement and
+    # BEFORE any output is scrubbed/written). analyze_run mutates run_record.pages
+    # in place, filling page.analysis, so the unchanged scrub→write_outputs→
+    # write_run path below serializes the populated analysis for free (output.py /
+    # store.py / models.py UNCHANGED — Phase 6 owns output formats). The key is
+    # threaded through `scrub` so every analysis field + degrade/grounding log line
+    # is redacted (AUTH-04 / T-05-redact).
+    ai_summary = None
+    if ai:
+        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches
     # disk. A Lighthouse HTML/JSON capture of an authenticated page (or the login
     # form itself) can embed a submitted password in a rendered field value; the
@@ -732,6 +939,8 @@ def crawl(
         sys.stdout.write("\n")
     else:
         _render_crawl_summary(run_record, samples=samples, run_dir=run_dir)
+        # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
+        _render_ai_health(ai_summary, scrub=scrub)
 
     # AUTH-03 / D-06: a mid-crawl session loss flushed the already-measured
     # authenticated pages as a valid tagged-partial run (written + persisted

@@ -1,0 +1,72 @@
+{
+  "url": "https://www.studyhalo.com/profile",
+  "url_key": "https://www.studyhalo.com/profile",
+  "perf_score": null,
+  "a11y_score": null,
+  "seo_score": null,
+  "best_practices_score": null,
+  "lcp_ms": null,
+  "cls": {
+    "median": 0.06,
+    "samples": [
+      0.06
+    ]
+  },
+  "inp_proxy_tbt_ms": null,
+  "ttfb_ms": {
+    "median": 220.0,
+    "samples": [
+      220.0
+    ]
+  },
+  "request_count": 28,
+  "total_bytes": 600000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/profile.js",
+  "slowest_request_ms": 410.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/profile.js",
+      "resource_type": "script",
+      "size_bytes": 210000,
+      "timing_ms": 410.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "Performance score, LCP, and TBT were not captured — these are insufficient data / unavailable for this page. The metrics that were captured are healthy: CLS 0.06 (good) and TTFB 220 ms, across 28 requests for 600,000 bytes, with the slowest request /static/profile.js at 410 ms.",
+    "potential_cause": "With load speed (LCP), performance score, and blocking time (TBT) all missing, no load-time conclusion can be drawn. The metrics that were captured — CLS and TTFB — are healthy.",
+    "suggested_optimization": "Re-measure to capture the missing metrics (performance score, LCP, TBT) before recommending any load-time fix. Nothing is actionable from the partial data alone.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 4 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "LCP is clearly too high and the page is loading slowly for users on this route.",
+    "potential_cause": "A slow Gatsby build and an overloaded MySQL database are behind the poor load time.",
+    "suggested_optimization": "Optimize the database, reduce image sizes, and improve the build pipeline.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
+  }
+}

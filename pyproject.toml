@@ -5,6 +5,7 @@ description = "General-purpose website performance auditing tool: crawl, measure
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=0.107,<0.108",
     "httpx>=0.27,<1",
     "playwright>=1.60,<2",
     "protego>=0.4,<1",
@@ -39,9 +40,10 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra -m 'not e2e'"
+addopts = "-ra -m 'not e2e and not llm'"
 markers = [
     "e2e: end-to-end test requiring Node + Chrome + network (opt-in; skipped by default in CI)",
+    "llm: advisory LLM-judge eval requiring ANTHROPIC_API_KEY + network (opt-in; run via -m llm)",
 ]
 
 [tool.ruff]

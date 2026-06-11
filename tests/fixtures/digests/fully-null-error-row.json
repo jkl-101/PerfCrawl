@@ -1,0 +1,20 @@
+{
+  "url": "https://www.studyhalo.com/broken",
+  "url_key": "https://www.studyhalo.com/broken",
+  "perf_score": null,
+  "a11y_score": null,
+  "seo_score": null,
+  "best_practices_score": null,
+  "lcp_ms": null,
+  "cls": null,
+  "inp_proxy_tbt_ms": null,
+  "ttfb_ms": null,
+  "request_count": null,
+  "total_bytes": null,
+  "status_code": 500,
+  "slowest_request_url": null,
+  "slowest_request_ms": null,
+  "waterfall": [],
+  "diagnostics": null,
+  "analysis": null
+}

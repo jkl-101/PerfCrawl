@@ -1,0 +1,89 @@
+{
+  "url": "https://www.studyhalo.com/pricing",
+  "url_key": "https://www.studyhalo.com/pricing",
+  "perf_score": 90.0,
+  "a11y_score": 89.0,
+  "seo_score": 90.0,
+  "best_practices_score": 90.0,
+  "lcp_ms": {
+    "median": 2500.0,
+    "samples": [
+      2500.0
+    ]
+  },
+  "cls": {
+    "median": 0.1,
+    "samples": [
+      0.1
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 200.0,
+    "samples": [
+      200.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 800.0,
+    "samples": [
+      800.0
+    ]
+  },
+  "request_count": 37,
+  "total_bytes": 1234567,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/pricing.js",
+  "slowest_request_ms": 789.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/pricing.js",
+      "resource_type": "script",
+      "size_bytes": 256000,
+      "timing_ms": 789.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/pricing.css",
+      "resource_type": "stylesheet",
+      "size_bytes": 41000,
+      "timing_ms": 233.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "Every Core Web Vital sits exactly on the good boundary: LCP 2,500 ms (good is ≤2,500 ms), CLS 0.10 (good is ≤0.10), and TBT 200 ms (good is ≤200 ms) are all at or under the good threshold, so all three classify as good. TTFB is 800 ms, the page makes 37 requests for 1,234,567 bytes, and the slowest request is /static/pricing.js at 789 ms / 256,000 bytes.",
+    "potential_cause": "Nothing falls in the needs-improvement or poor range — every metric is at or under its good cutoff — so there is no performance problem to diagnose.",
+    "suggested_optimization": "No urgent action is warranted: the metrics sit right at the good boundary. At most, keep an eye on the heaviest asset (/static/pricing.js, 256,000 bytes / 789 ms) in case it grows, but no fix is needed on a 1,234,567-byte page that is already within all good thresholds.",
+    "dimensions": {
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "LCP at 2,500 ms is already in poor territory and the CLS of 0.10 is producing noticeable layout shift — the page is struggling on the core vitals.",
+    "potential_cause": "A heavy React hydration step and a slow Fastly CDN edge are delaying first paint and shifting content as components mount.",
+    "suggested_optimization": "Reduce JavaScript, optimize images, and improve caching to bring the Core Web Vitals down into the good range.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
+  }
+}

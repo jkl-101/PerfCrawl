@@ -1,0 +1,96 @@
+{
+  "url": "https://www.studyhalo.com/enroll",
+  "url_key": "https://www.studyhalo.com/enroll",
+  "perf_score": 50.0,
+  "a11y_score": 90.0,
+  "seo_score": 89.0,
+  "best_practices_score": 86.0,
+  "lcp_ms": {
+    "median": 3500.0,
+    "samples": [
+      3500.0
+    ]
+  },
+  "cls": {
+    "median": 0.05,
+    "samples": [
+      0.05
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 300.0,
+    "samples": [
+      300.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 1200.0,
+    "samples": [
+      1200.0
+    ]
+  },
+  "request_count": 60,
+  "total_bytes": 2000000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/static/main.js",
+  "slowest_request_ms": 980.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/static/main.js",
+      "resource_type": "script",
+      "size_bytes": 540000,
+      "timing_ms": 980.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/main.css",
+      "resource_type": "stylesheet",
+      "size_bytes": 96000,
+      "timing_ms": 320.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/enroll",
+      "resource_type": "document",
+      "size_bytes": 22000,
+      "timing_ms": 1200.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "LCP is 3,500 ms (needs improvement), CLS is 0.05 (good), TBT is 300 ms, and TTFB is 1,200 ms (high). The page makes 60 requests for 2,000,000 bytes. The slowest request is /static/main.js at 980 ms / 540,000 bytes, followed by /static/main.css at 320 ms, and the /enroll document itself responds in 1,200 ms.",
+    "potential_cause": "The contributors are the requests actually present in the data: the slow /static/main.js (980 ms / 540,000 bytes) and the 1,200 ms server response on the /enroll document. No framework, server, or CDN — React, Django, nginx, or otherwise — can be inferred from these metrics, and none is asserted.",
+    "suggested_optimization": "Reduce or defer /static/main.js (980 ms / 540,000 bytes) and investigate the 1,200 ms server response on the /enroll document. Recommendations stay grounded in the measured requests, not in any guessed technology stack.",
+    "dimensions": {
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 },
+      "prioritization": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "CLS 0.05 is the standout problem and the layout is visibly unstable on load.",
+    "potential_cause": "The Django template rendering and a slow Redis cache are the root cause of the slowdown.",
+    "suggested_optimization": "Optimize the backend, reduce the layout shift, and add caching.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}

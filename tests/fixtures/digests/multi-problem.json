@@ -1,0 +1,96 @@
+{
+  "url": "https://www.studyhalo.com/library",
+  "url_key": "https://www.studyhalo.com/library",
+  "perf_score": 38.0,
+  "a11y_score": 84.0,
+  "seo_score": 82.0,
+  "best_practices_score": 78.0,
+  "lcp_ms": {
+    "median": 5200.0,
+    "samples": [
+      5200.0
+    ]
+  },
+  "cls": {
+    "median": 0.15,
+    "samples": [
+      0.15
+    ]
+  },
+  "inp_proxy_tbt_ms": {
+    "median": 620.0,
+    "samples": [
+      620.0
+    ]
+  },
+  "ttfb_ms": {
+    "median": 3100.0,
+    "samples": [
+      3100.0
+    ]
+  },
+  "request_count": 140,
+  "total_bytes": 5800000,
+  "status_code": 200,
+  "slowest_request_url": "https://www.studyhalo.com/media/catalog.json",
+  "slowest_request_ms": 2950.0,
+  "waterfall": [
+    {
+      "url": "https://www.studyhalo.com/media/catalog.json",
+      "resource_type": "fetch",
+      "size_bytes": 1200000,
+      "timing_ms": 2950.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/media/cover-pack.jpg",
+      "resource_type": "image",
+      "size_bytes": 2100000,
+      "timing_ms": 1680.0,
+      "status_code": 200
+    },
+    {
+      "url": "https://www.studyhalo.com/static/vendor.bundle.js",
+      "resource_type": "script",
+      "size_bytes": 760000,
+      "timing_ms": 980.0,
+      "status_code": 200
+    }
+  ],
+  "diagnostics": null,
+  "analysis": null,
+  "gold": {
+    "observation": "The worst problem is page weight: 5,800,000 bytes across 140 requests. Beyond that, LCP is 5,200 ms (poor), TTFB is 3,100 ms (very high), TBT is 620 ms (high), and CLS is 0.15 (needs improvement). The biggest assets are /media/catalog.json at 1,200,000 bytes / 2,950 ms, /media/cover-pack.jpg at 2,100,000 bytes / 1,680 ms, and /static/vendor.bundle.js at 760,000 bytes / 980 ms.",
+    "potential_cause": "The oversized 5,800,000-byte payload dominates the load — especially the 1,200,000-byte /media/catalog.json (2,950 ms) and the 2,100,000-byte /media/cover-pack.jpg image — which is the primary driver behind the poor LCP and overall slowness.",
+    "suggested_optimization": "Cut page weight first: compress and resize the 2,100,000-byte /media/cover-pack.jpg image, slim the 1,200,000-byte /media/catalog.json, and code-split the 760,000-byte /static/vendor.bundle.js. Page weight is the lead because it is the worst problem on this page.",
+    "dimensions": {
+      "prioritization": { "verdict": "PASS", "score": 5 },
+      "causal_plausibility": { "verdict": "PASS", "score": 5 },
+      "threshold_correctness": { "verdict": "PASS", "score": 5 },
+      "actionability": { "verdict": "PASS", "score": 5 }
+    }
+  },
+  "anti_gold": {
+    "observation": "CLS at 0.15 is the page's defining problem — the layout instability is what users will notice most.",
+    "potential_cause": "A misbehaving React reconciliation loop and a throttled AWS Lambda are causing the shifts and the delays.",
+    "suggested_optimization": "Fix the layout shifts, reduce re-renders, and optimize your serverless functions.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
+  }
+}
