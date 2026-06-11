@@ -20,6 +20,8 @@ import judge
 import pytest
 from judge import DimensionVerdict, JudgeVerdict
 
+from perfcrawl.provider import AnthropicProvider
+
 
 # --- A tiny, key-free, offline judge-client double (FakeAnthropic-style) ---------
 class _FakeJudgeParsed:
@@ -112,7 +114,9 @@ def test_dimension_verdict_rejects_overlong_rationale() -> None:
 # --- judge.py: judge_pair success + degrade-to-None ------------------------------
 def test_judge_pair_returns_verdict_on_success() -> None:
     client = _FakeJudgeClient(result=_verdict())
-    out = judge.judge_pair(client, digest_text="d", analysis_text="a", gold_label_text="g")
+    out = judge.judge_pair(
+        AnthropicProvider(client), digest_text="d", analysis_text="a", gold_label_text="g"
+    )
     assert isinstance(out, JudgeVerdict)
     assert out.causal_plausibility.verdict == "PASS"
     assert client.messages.call_count == 1
@@ -120,13 +124,23 @@ def test_judge_pair_returns_verdict_on_success() -> None:
 
 def test_judge_pair_degrades_to_none_on_none_parse() -> None:
     client = _FakeJudgeClient(result=None)
-    assert judge.judge_pair(client, digest_text="d", analysis_text="a", gold_label_text="g") is None
+    assert (
+        judge.judge_pair(
+            AnthropicProvider(client), digest_text="d", analysis_text="a", gold_label_text="g"
+        )
+        is None
+    )
 
 
 def test_judge_pair_degrades_to_none_on_apierror() -> None:
     err = anthropic.APIError("boom", httpx.Request("POST", "http://x"), body=None)
     client = _FakeJudgeClient(error=err)
-    assert judge.judge_pair(client, digest_text="d", analysis_text="a", gold_label_text="g") is None
+    assert (
+        judge.judge_pair(
+            AnthropicProvider(client), digest_text="d", analysis_text="a", gold_label_text="g"
+        )
+        is None
+    )
     # No app-level retry: the SDK already exhausted max_retries before raising.
     assert client.messages.call_count == 1
 

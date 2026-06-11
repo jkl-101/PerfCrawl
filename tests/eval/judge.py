@@ -1,11 +1,12 @@
 """LLM-as-judge engine for eval dims 6-9 (Phase 05.1).
 
 This module is the *judge* — the twin of the already-GREEN Phase-05 generator in
-``src/perfcrawl/analysis.py``. It copies the proven ``client.messages.parse(
-output_format=...)`` SDK shape verbatim (``analysis.py:291-304``) but swaps in a
-stronger independent grader (``claude-opus-4-8``, D-04 — opus judging the
-sonnet-4-6 generator), a per-dimension ``JudgeVerdict`` schema, a frozen
-reference-guided ``JUDGE_RUBRIC``, and the same degrade-to-None error handling.
+``src/perfcrawl/analysis.py``. Like the generator it routes through the single
+provider-agnostic ``Provider.parse_structured`` seam (D-04) but swaps in a
+stronger independent grader (``claude-opus-4-8`` / ``gpt-5.5``, D-04 — the
+flagship judging the cheaper generator), a per-dimension ``JudgeVerdict`` schema,
+a frozen reference-guided ``JUDGE_RUBRIC``, and the same degrade-to-None handling
+(which now lives inside the provider impl).
 
 It lives in ``tests/eval/`` (no ``__init__.py``) so pytest's default prepend
 import mode puts ``tests/eval`` on ``sys.path`` and Plan 04's harness can
@@ -26,7 +27,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import anthropic
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
@@ -34,6 +34,7 @@ from rich.console import Console
 # judge model id and its output bound live THERE, never inlined here — bumping
 # AI_OPUS_MODEL must move the judge with it (the 4-7 -> 4-8 drift already bit once).
 from perfcrawl.constants import AI_OPUS_MODEL, JUDGE_MAX_TOKENS
+from perfcrawl.provider import Provider
 
 # Module-owned stderr console (mirrors analysis._err_console / measure_pass).
 # A library/eval module never imports cli.py's console — that is a layering cycle.
@@ -195,7 +196,7 @@ chases the lesser problem, FAIL it.
 
 
 def judge_pair(
-    client: anthropic.Anthropic,
+    provider: Provider,
     *,
     digest_text: str,
     analysis_text: str,
@@ -204,42 +205,29 @@ def judge_pair(
 ) -> JudgeVerdict | None:
     """Run one reference-guided judge call for a triple; degrade to ``None`` (D-09).
 
-    Copies the proven-GREEN ``analyze_page`` body verbatim (``analysis.py:291-304``):
-    ``client.messages.parse(model, max_tokens=JUDGE_MAX_TOKENS, temperature=0, system=[{
-    JUDGE_RUBRIC, cache_control: ephemeral}], messages=[{user, 3-part triple}],
-    output_format=JudgeVerdict)`` → ``resp.parsed_output``. The static JUDGE_RUBRIC
-    is the ONLY thing in ``system`` (byte-stable cache prefix); the variable triple
-    goes in ``messages`` in the FIXED field order (digest, analysis, gold) so the
-    contract is pinned. A grader MUST be reproducible → ``temperature=0``.
+    The twin of the widened ``analysis.analyze_page``: delegates to
+    ``provider.parse_structured(system_text=JUDGE_RUBRIC, user_text=<3-part triple>,
+    output_model=JudgeVerdict, model=model, max_tokens=JUDGE_MAX_TOKENS)`` — the
+    single provider-agnostic seam (D-04). The static JUDGE_RUBRIC is the ONLY thing
+    in ``system_text`` (byte-stable cache prefix); the variable triple is the
+    ``user_text`` in the FIXED field order (digest, analysis, gold) so the contract
+    is pinned. A grader MUST be reproducible — the Anthropic impl pins
+    ``temperature=0``, the OpenAI impl is a reasoning model with no sampling temp.
 
-    Degrades to ``None`` — never crashes, never loop-retries — on
-    ``anthropic.APIError``, any broad ``Exception`` (defense-in-depth), and a
-    ``parsed_output is None`` (a refusal / max_tokens truncation). On the judge lane
-    a ``None`` means a single dropped calibration pair, not a failed run. No
-    app-level retry (D-11): the SDK already exhausted ``max_retries`` before raising.
+    Degrades to ``None`` — never crashes, never loop-retries — on an SDK error, a
+    refusal, or a truncation; that disposition now lives inside the provider impl
+    (D-09/D-11). On the judge lane a ``None`` means a single dropped calibration
+    pair, not a failed run.
     """
-    try:
-        resp = client.messages.parse(
-            model=model,
-            max_tokens=JUDGE_MAX_TOKENS,
-            temperature=0,
-            system=[
-                {"type": "text", "text": JUDGE_RUBRIC, "cache_control": {"type": "ephemeral"}}
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"<digest>\n{digest_text}\n</digest>\n"
-                        f"<generated_analysis>\n{analysis_text}\n</generated_analysis>\n"
-                        f"<gold_reference>\n{gold_label_text}\n</gold_reference>"
-                    ),
-                }
-            ],
-            output_format=JudgeVerdict,
-        )
-        return resp.parsed_output
-    except anthropic.APIError:
-        return None
-    except Exception:
-        return None
+    user = (
+        f"<digest>\n{digest_text}\n</digest>\n"
+        f"<generated_analysis>\n{analysis_text}\n</generated_analysis>\n"
+        f"<gold_reference>\n{gold_label_text}\n</gold_reference>"
+    )
+    return provider.parse_structured(
+        system_text=JUDGE_RUBRIC,
+        user_text=user,
+        output_model=JudgeVerdict,
+        model=model,
+        max_tokens=JUDGE_MAX_TOKENS,
+    )
