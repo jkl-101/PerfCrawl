@@ -238,6 +238,53 @@ ANTHROPIC_API_KEY_ENV: str = "ANTHROPIC_API_KEY"
 # error, not a measurement/auth failure; `case $? in 1) fix invocation ;; esac`.
 
 
+# --- Phase 05.2 OpenAI provider constants (D-02/D-03/D-07/Pitfall-2) ---------
+# Provider-agnostic adapter: OpenAI becomes a first-class `--ai` provider. EVERY
+# OpenAI literal (model ids, key-env NAME, token caps) lives HERE — provider.py,
+# cli.py, judge.py and the tests import these by name, NEVER inline `"gpt-5-mini"`
+# or `"OPENAI_API_KEY"`. The model-id strings are volatile (Task-1 verified at
+# execute time, 2026-06-11); a re-pin is a one-line edit here (RESEARCH A1).
+
+# D-02: the env var the OpenAI API key is read from. Credential intake is env-only
+# — the key is NEVER a Typer Option (argv is visible in `ps`/shell history).
+OPENAI_API_KEY_ENV: str = "OPENAI_API_KEY"
+
+# D-07: bulk default generator — the cost-mini OpenAI analog to claude-sonnet-4-6.
+# Task-1 confirmed (2026-06-11); re-pin at execute time, model-ids rotate.
+OPENAI_DEFAULT_AI_MODEL: str = "gpt-5-mini"
+
+# D-07: the independent grader tier — the flagship OpenAI analog to AI_OPUS_MODEL
+# (opus-judges-sonnet: a stronger model grades the cheaper generator). Task-1
+# confirmed (2026-06-11); re-pin at execute time, model-ids rotate.
+OPENAI_JUDGE_MODEL: str = "gpt-5.5"
+
+# Pitfall-2: gpt-5-family reasoning tokens consume the completion budget BEFORE the
+# visible answer is emitted — do NOT reuse the Anthropic AI_MAX_TOKENS (600), a
+# truncated structured parse degrades the page to None.
+OPENAI_AI_MAX_TOKENS: int = 2000
+
+# Pitfall-2: the judge emits four per-dimension verdicts AND burns reasoning tokens
+# first — do NOT reuse the Anthropic JUDGE_MAX_TOKENS (800).
+OPENAI_JUDGE_MAX_TOKENS: int = 3000
+
+# D-03: the single-source provider registry every consumer imports. Maps a provider
+# NAME to its default generator model, independent judge model, and key-env NAME.
+# Anthropic entries reference the existing Phase-5 constants by name (never re-spell
+# the literals); OpenAI entries reference the block above.
+PROVIDERS = {
+    "anthropic": {
+        "default_model": DEFAULT_AI_MODEL,
+        "judge_model": AI_OPUS_MODEL,
+        "key_env": ANTHROPIC_API_KEY_ENV,
+    },
+    "openai": {
+        "default_model": OPENAI_DEFAULT_AI_MODEL,
+        "judge_model": OPENAI_JUDGE_MODEL,
+        "key_env": OPENAI_API_KEY_ENV,
+    },
+}
+
+
 # --- Phase 05.1 eval band cutoffs (AI-SPEC §4 / FM-5 single-source-of-truth) -
 # The deterministic dim-7 CWV band pre-flag classifies each page's LCP/CLS into
 # the web.dev Core Web Vitals bands BEFORE the paid judge spends a token. These
