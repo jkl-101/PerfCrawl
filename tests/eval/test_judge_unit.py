@@ -14,11 +14,10 @@ degrade-to-None, and the stdlib calibration math (Cohen's kappa edges + the
 from __future__ import annotations
 
 import anthropic
-import httpx
-import pytest
-
 import calibrate
+import httpx
 import judge
+import pytest
 from judge import DimensionVerdict, JudgeVerdict
 
 
@@ -187,6 +186,37 @@ def test_calibrate_kappa_exposes_rubber_stamp() -> None:
     # Raw agreement is 4/5 = 0.8 (looks high), but kappa collapses to ~0.
     assert out["kappa"] < 0.70
     assert out["trusted"] is False
+
+
+# --- calibrate.py: the degenerate-label guard (CR-01) ----------------------------
+def test_is_calibratable_rejects_single_call_label() -> None:
+    """All-PASS human calls can't exercise kappa — uncalibratable even with score spread."""
+    assert calibrate.is_calibratable([5, 4, 3], ["PASS", "PASS", "PASS"]) is False
+
+
+def test_is_calibratable_rejects_constant_scores() -> None:
+    """A constant score array has no defined rank correlation — uncalibratable."""
+    assert calibrate.is_calibratable([5, 5, 5], ["PASS", "FAIL", "PASS"]) is False
+
+
+def test_is_calibratable_accepts_both_labels_and_score_spread() -> None:
+    assert calibrate.is_calibratable([5, 1, 4], ["PASS", "FAIL", "PASS"]) is True
+
+
+def test_calibrate_short_circuits_on_uncalibratable_all_pass() -> None:
+    """The exact CR-01 shape — all-PASS gold, near-constant scores — must NOT return a
+    confident verdict. It reports uncalibratable=True + trusted=False, never a fake
+    kappa=1.0 trusted=True (the bug) nor a misleading trusted=False from a crash.
+    """
+    out = calibrate.calibrate(
+        judge_scores=[5, 5, 5, 5],
+        human_scores=[5, 5, 5, 5],
+        judge_calls=["PASS", "PASS", "PASS", "PASS"],
+        human_calls=["PASS", "PASS", "PASS", "PASS"],
+    )
+    assert out["uncalibratable"] is True
+    assert out["trusted"] is False
+    assert out["spearman"] is None and out["kappa"] is None
 
 
 def pydantic_validation_error():

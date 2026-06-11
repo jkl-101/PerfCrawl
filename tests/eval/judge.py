@@ -30,6 +30,11 @@ import anthropic
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
+# Single-source-of-truth for every Phase-5 AI literal (constants.py:182-215): the
+# judge model id and its output bound live THERE, never inlined here — bumping
+# AI_OPUS_MODEL must move the judge with it (the 4-7 -> 4-8 drift already bit once).
+from perfcrawl.constants import AI_OPUS_MODEL, JUDGE_MAX_TOKENS
+
 # Module-owned stderr console (mirrors analysis._err_console / measure_pass).
 # A library/eval module never imports cli.py's console — that is a layering cycle.
 _err_console = Console(stderr=True)
@@ -195,12 +200,12 @@ def judge_pair(
     digest_text: str,
     analysis_text: str,
     gold_label_text: str,
-    model: str = "claude-opus-4-8",
+    model: str = AI_OPUS_MODEL,
 ) -> JudgeVerdict | None:
     """Run one reference-guided judge call for a triple; degrade to ``None`` (D-09).
 
     Copies the proven-GREEN ``analyze_page`` body verbatim (``analysis.py:291-304``):
-    ``client.messages.parse(model, max_tokens=800, temperature=0, system=[{
+    ``client.messages.parse(model, max_tokens=JUDGE_MAX_TOKENS, temperature=0, system=[{
     JUDGE_RUBRIC, cache_control: ephemeral}], messages=[{user, 3-part triple}],
     output_format=JudgeVerdict)`` → ``resp.parsed_output``. The static JUDGE_RUBRIC
     is the ONLY thing in ``system`` (byte-stable cache prefix); the variable triple
@@ -216,7 +221,7 @@ def judge_pair(
     try:
         resp = client.messages.parse(
             model=model,
-            max_tokens=800,
+            max_tokens=JUDGE_MAX_TOKENS,
             temperature=0,
             system=[
                 {"type": "text", "text": JUDGE_RUBRIC, "cache_control": {"type": "ephemeral"}}

@@ -354,6 +354,30 @@ def load_gold():
 
 
 @pytest.fixture
+def load_anti_gold():
+    """Load a fixture's raw ``anti_gold`` label dict by name (mirrors ``load_gold``).
+
+    Usage: ``load_anti_gold("slow-lcp")`` → the ``anti_gold`` object — a
+    deliberately-WRONG O/C/O analysis (phantom-stack cause, threshold inversion,
+    boilerplate, tunnel-vision) with a per-dimension FAIL + low score authored
+    beside the gold label, or ``None`` for an unlabeled fixture.
+
+    The anti-gold is the *negative* half of the judge calibration set (Phase 05.1
+    CR-01 fix): without human-labeled FAIL examples, Cohen's kappa can never expose
+    a rubber-stamp judge and the rank correlation has no score variance, so the
+    trust gate could never legitimately reach ``trusted=True``. Like ``gold`` it
+    rides as a top-level key dropped by ``PageResult``'s ``extra="ignore"`` config,
+    so it never reaches ``build_digest`` — hence the RAW ``json.loads`` read here.
+    """
+
+    def _load(name: str) -> dict | None:
+        path = DIGEST_FIXTURES_DIR / f"{name}.json"
+        return json.loads(path.read_text()).get("anti_gold")
+
+    return _load
+
+
+@pytest.fixture
 def lh_404() -> dict:
     """LH 13.3.0 JSON capture of a 404 main-document (Phase 2 D-13 partial-result)."""
     return json.loads((LH_FIXTURES_DIR / "studyhalo-404.json").read_text())

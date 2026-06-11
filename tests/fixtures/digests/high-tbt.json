@@ -62,5 +62,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "CLS 0.05 is causing visible layout jank and is the page's biggest issue; everything else looks healthy.",
+    "potential_cause": "A poorly tuned Next.js hydration pass and a slow Varnish cache layer are to blame for the instability.",
+    "suggested_optimization": "Stabilize the layout, optimize images, and enable better caching across the stack.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

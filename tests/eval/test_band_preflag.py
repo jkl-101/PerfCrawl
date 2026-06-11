@@ -34,17 +34,24 @@ def _cls_band(page) -> str:
 
 # (fixture name, expected LCP band, expected CLS band) — bands derived from the
 # actual fixture medians (read before asserting; do NOT invent values):
-#   healthy-all-green  LCP 1200  -> good            CLS 0.02 -> good
-#   green-trap         LCP 1100  -> good            CLS 0.01 -> good
-#   high-cls           LCP 2300  -> good            CLS 0.42 -> poor
-#   slow-lcp           LCP 4800  -> poor            CLS 0.03 -> good
-#   adversarial-number LCP 2500  -> good (boundary) CLS 0.10 -> good (boundary)
+#   healthy-all-green  LCP 1200  -> good             CLS 0.02 -> good
+#   green-trap         LCP 1100  -> good             CLS 0.01 -> good
+#   high-cls           LCP 2300  -> good             CLS 0.42 -> poor
+#   slow-lcp           LCP 4800  -> poor             CLS 0.03 -> good
+#   adversarial-number LCP 2500  -> good (boundary)  CLS 0.10 -> good (boundary)
+#   multi-problem      LCP 5200  -> poor             CLS 0.15 -> needs-improvement
+#   stack-bait         LCP 3500  -> needs-improvement CLS 0.05 -> good
+# multi-problem + stack-bait are here specifically to exercise the needs-improvement
+# and poor bands deterministically (the good-only cases above never hit them) — a
+# band-boundary regression is most likely to surface on exactly these non-good rows.
 _BAND_CASES = [
     ("healthy-all-green", "good", "good"),
     ("green-trap", "good", "good"),
     ("high-cls", "good", "poor"),
     ("slow-lcp", "poor", "good"),
     ("adversarial-number", "good", "good"),
+    ("multi-problem", "poor", "needs-improvement"),
+    ("stack-bait", "needs-improvement", "good"),
 ]
 
 

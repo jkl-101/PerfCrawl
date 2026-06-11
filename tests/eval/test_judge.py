@@ -1,10 +1,13 @@
 """Env-gated LLM-judge calibration harness (Phase 05.1 — the paid Lane-2 test).
 
-This is the *build-and-run-once* meta-eval (AI-SPEC §5, D-03): it builds a judge
-verdict for every human-labeled fixture, calibrates the judge's 1-5 scores and
-PASS/FAIL calls against the gold labels (``calibrate``), and emits a per-dimension
-``{spearman, kappa, trusted}`` report for dims 6-9. It is the ONLY place in the
-suite that spends real tokens, so it is double-gated:
+This is the *build-and-run-once* meta-eval (AI-SPEC §5, D-03): for every
+human-labeled fixture it has the opus judge grade TWO reference analyses — the
+``gold`` (the senior-engineer-accepted answer, labeled PASS / high score) and the
+``anti_gold`` (a deliberately-wrong answer, labeled FAIL / low score) — then
+calibrates the judge's 1-5 scores and PASS/FAIL calls against those human labels
+(``calibrate``) and emits a per-dimension ``{spearman, kappa, trusted}`` report for
+dims 6-9. It is the ONLY place in the suite that spends real tokens, so it is
+double-gated:
 
   - ``pytest.mark.llm``  — default ``addopts = -m 'not e2e and not llm'`` deselects
     it on a bare ``uv run pytest`` (D-02: the judge NEVER fires on a normal
@@ -12,22 +15,32 @@ suite that spends real tokens, so it is double-gated:
   - ``skipif(no ANTHROPIC_API_KEY)`` — belt-and-braces, so an explicit ``-m llm``
     WITHOUT a key SKIPS cleanly instead of erroring on a missing key.
 
+CR-01 FIX — grade the LABELED text, against a calibratable label set. The earlier
+design re-generated an analysis with ``analyze_page`` and then correlated the
+judge's grade of THAT text against the human's grade of the *gold* text — two
+different objects — over an all-PASS, near-constant gold set. That made the trust
+gate structurally incapable of ever reaching ``trusted=True`` and blind to
+rubber-stamping (kappa could only be 1.0 or 0). The harness now judges the SAME
+texts the human labeled (gold + anti_gold), so judge and human grade the same
+object, and the gold/anti_gold pairing guarantees both PASS and FAIL human calls
+and a 1-5 score spread per dimension — the precondition ``calibrate`` needs.
+
 ADVISORY-UNTIL-CALIBRATED (D-03 / T-05.1-12): a dimension whose
-``min(spearman, kappa) < 0.70`` is reported but NEVER fails the test — an
-uncalibrated judge must not gate a merge. The harness's only hard assertion is
-that it ran and emitted a calibration report for all four judged dimensions, NOT
-that all four clear the 0.70 bar.
+``min(spearman, kappa) < 0.70`` (or one whose labels are uncalibratable) is
+reported but NEVER fails the test — an uncalibrated judge must not gate a merge.
+The harness's only hard assertion is that it ran and emitted a calibration report
+for all four judged dimensions, NOT that all four clear the 0.70 bar.
 
 Every printed line is routed through the AUTH-04 ``make_scrubber`` seeded with the
-key (T-05.1-10): the judge prompt, the generated analysis, and the calibration
-report could otherwise leak ``ANTHROPIC_API_KEY`` into pytest's captured output.
+key (T-05.1-10): the judge prompt and the calibration report could otherwise leak
+``ANTHROPIC_API_KEY`` into pytest's captured output.
 
-Independence: the generator is the sonnet ``analyze_page`` path and the grader is
-the opus ``judge_pair`` path on two distinct clients, so the judge never grades
-its own output (AI-SPEC §3 — a grader must be independent of the generator).
+Independence: the graded texts are human-authored references (gold) and
+human-reviewed deliberately-bad references (anti_gold), never the judge's own
+output, so the grader is independent of what it grades (AI-SPEC §3).
 
-A ``None`` verdict (``judge_pair`` degraded) or a ``None`` generated analysis is a
-DROPPED calibration pair — never a fabricated verdict (§3 Pitfall 6 / T-05.1-13).
+A ``None`` verdict (``judge_pair`` degraded) is a DROPPED calibration point — never
+a fabricated verdict (§3 Pitfall 6 / T-05.1-13).
 """
 
 from __future__ import annotations
@@ -43,7 +56,7 @@ import pytest
 
 from perfcrawl import analysis
 from perfcrawl.auth import make_scrubber
-from perfcrawl.constants import ANTHROPIC_API_KEY_ENV
+from perfcrawl.constants import AI_MAX_RETRIES, AI_REQUEST_TIMEOUT_S, ANTHROPIC_API_KEY_ENV
 
 # Double gate: the marker deselects by default; skipif is the no-key safety net so
 # an explicit `-m llm` without a key skips rather than erroring (AI-SPEC §3 P1).
@@ -82,22 +95,23 @@ def _render_analysis(observation, cause, optimization) -> str:
     )
 
 
-def test_judge_calibration_build_and_run_once(digest_page, load_gold) -> None:
-    """Build a judge verdict per labeled fixture, then calibrate per dimension (D-03).
+def test_judge_calibration_build_and_run_once(digest_page, load_gold, load_anti_gold) -> None:
+    """Judge gold + anti_gold per labeled fixture, then calibrate per dimension (D-03).
 
-    For each human-labeled fixture: ``build_digest`` (the SAME digest the generator
-    saw) → RE-GENERATE the analysis via ``analysis.analyze_page`` on a sonnet
-    generator client (the 12 fixtures ship ``analysis=None`` per D-06, so there is
-    no captured analysis to load — the harness must produce one) → render the gold
-    label → ``judge_pair`` on a DISTINCT opus judge client. Collect each
-    ``JudgeVerdict``; drop any pair where the generator OR the judge degraded to
-    ``None`` (a missing calibration point, never a fabricated verdict). Then per
-    judged dim, ``calibrate`` the judge vs human score/verdict arrays and emit a
-    scrubbed ``{dim}: spearman=.. kappa=.. trusted=..`` line.
+    For each human-labeled fixture: ``build_digest`` → for EACH labeled reference
+    (the ``gold`` PASS answer and the ``anti_gold`` FAIL answer) render its O/C/O
+    and ``judge_pair`` it on the opus judge client, always against the gold text as
+    the ``<gold_reference>``. The judge therefore grades the SAME text the human
+    labeled (CR-01 fix), and every dimension accumulates both a PASS point (gold)
+    and a FAIL point (anti_gold) with a 1-5 score spread — the calibratable shape.
+    Drop any reference where ``judge_pair`` degraded to ``None`` (a missing point,
+    never a fabricated verdict). Then per judged dim, ``calibrate`` the judge vs
+    human score/verdict arrays and emit a scrubbed
+    ``{dim}: spearman=.. kappa=.. trusted=..`` line.
 
-    The harness stays ADVISORY: a dim below ``min(spearman, kappa) >= 0.70`` is
-    reported but never fails the test. The only assertion is that a calibration
-    report was emitted for all four judged dimensions.
+    The harness stays ADVISORY: a dim below ``min(spearman, kappa) >= 0.70`` (or one
+    whose labels are uncalibratable) is reported but never fails the test. The only
+    assertion is that a calibration report was emitted for all four judged dimensions.
     """
     key = os.environ[ANTHROPIC_API_KEY_ENV]
     scrub = make_scrubber(key)
@@ -107,36 +121,30 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold) -> None:
         # survive into pytest's captured stdout.
         print(scrub(line))
 
-    # Independent clients: sonnet generates, opus judges (a grader must not grade its
-    # own output, AI-SPEC §3). The SDK is thread-safe but we run sequentially so the
-    # JUDGE_RUBRIC prompt cache warms on pair 1.
-    generator_client = anthropic.Anthropic(api_key=key)
-    judge_client = anthropic.Anthropic(api_key=key)
+    # One opus judge client. Mirror the production client tuning
+    # (cli._run_ai_post_pass): a bounded retry budget + a per-request timeout below
+    # the SDK's 10-min default so a hung judge call degrades that point promptly
+    # instead of stalling the whole harness. Sequential calls warm the JUDGE_RUBRIC
+    # prompt cache on the first pair.
+    judge_client = anthropic.Anthropic(
+        api_key=key, max_retries=AI_MAX_RETRIES, timeout=AI_REQUEST_TIMEOUT_S
+    )
 
     # Per-dimension parallel arrays of (judge_score, human_score, judge_call, human_call),
-    # accumulated only over pairs that survived both the generator and the judge.
+    # accumulated over every labeled reference (gold + anti_gold) the judge graded.
     judge_scores: dict[str, list[float]] = {d: [] for d in _JUDGED_DIMS}
     human_scores: dict[str, list[float]] = {d: [] for d in _JUDGED_DIMS}
     judge_calls: dict[str, list[str]] = {d: [] for d in _JUDGED_DIMS}
     human_calls: dict[str, list[str]] = {d: [] for d in _JUDGED_DIMS}
 
-    judged_pairs = 0
+    judged_points = 0
     for name in _labeled_fixture_names():
         gold = load_gold(name)
         if gold is None:
-            continue  # the fully-null-error-row carries no gold (D-06) — not a pair
+            continue  # the fully-null-error-row carries no gold (D-06) — not a point
 
         page = digest_page(name)
-        digest_text = analysis.build_digest(page)  # the SAME digest the generator saw
-
-        # RE-GENERATE the analysis (fixtures ship analysis=None — nothing to load).
-        generated = analysis.analyze_page(generator_client, digest_text)
-        if generated is None:
-            emit(f"[drop] {name}: generator degraded to None")
-            continue
-        analysis_text = _render_analysis(
-            generated.observation, generated.potential_cause, generated.suggested_optimization
-        )
+        digest_text = analysis.build_digest(page)
 
         gold_text = _render_analysis(
             gold.get("observation"),
@@ -144,28 +152,43 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold) -> None:
             gold.get("suggested_optimization"),
         )
 
-        verdict = judge_mod.judge_pair(
-            judge_client,
-            digest_text=digest_text,
-            analysis_text=analysis_text,
-            gold_label_text=gold_text,
-        )
-        if verdict is None:
-            # A degraded judge call is a dropped pair, never a fabricated verdict.
-            emit(f"[drop] {name}: judge_pair degraded to None")
-            continue
+        # Grade BOTH labeled references against the gold reference. The gold answer
+        # should grade PASS/high; the anti_gold (phantom cause, threshold inversion,
+        # boilerplate, tunnel vision) should grade FAIL/low — that contrast is the
+        # signal the trust gate measures.
+        references = [("gold", gold)]
+        anti_gold = load_anti_gold(name)
+        if anti_gold is not None:
+            references.append(("anti_gold", anti_gold))
 
-        gold_dims = gold.get("dimensions") or {}
-        for dim in _JUDGED_DIMS:
-            jv = getattr(verdict, dim)
-            hv = gold_dims.get(dim) or {}
-            judge_scores[dim].append(float(jv.score))
-            judge_calls[dim].append(jv.verdict)
-            human_scores[dim].append(float(hv["score"]))
-            human_calls[dim].append(hv["verdict"])
-        judged_pairs += 1
+        for label, ref in references:
+            ref_text = _render_analysis(
+                ref.get("observation"),
+                ref.get("potential_cause"),
+                ref.get("suggested_optimization"),
+            )
+            verdict = judge_mod.judge_pair(
+                judge_client,
+                digest_text=digest_text,
+                analysis_text=ref_text,
+                gold_label_text=gold_text,
+            )
+            if verdict is None:
+                # A degraded judge call is a dropped point, never a fabricated verdict.
+                emit(f"[drop] {name}/{label}: judge_pair degraded to None")
+                continue
 
-    emit(f"calibration: {judged_pairs} judged pairs over {len(_JUDGED_DIMS)} dimensions")
+            ref_dims = ref.get("dimensions") or {}
+            for dim in _JUDGED_DIMS:
+                jv = getattr(verdict, dim)
+                hv = ref_dims.get(dim) or {}
+                judge_scores[dim].append(float(jv.score))
+                judge_calls[dim].append(jv.verdict)
+                human_scores[dim].append(float(hv["score"]))
+                human_calls[dim].append(hv["verdict"])
+            judged_points += 1
+
+    emit(f"calibration: {judged_points} judged points over {len(_JUDGED_DIMS)} dimensions")
 
     reports: dict[str, dict] = {}
     for dim in _JUDGED_DIMS:
@@ -173,15 +196,21 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold) -> None:
             result = calibrate_mod.calibrate(
                 judge_scores[dim], human_scores[dim], judge_calls[dim], human_calls[dim]
             )
-            emit(
-                f"{dim}: spearman={result['spearman']:.3f} "
-                f"kappa={result['kappa']:.3f} trusted={result['trusted']}"
-            )
+            if result.get("uncalibratable"):
+                # Defense-in-depth: the gold/anti_gold dataset makes this unreachable,
+                # but a future label edit that collapses a dim to one call or a
+                # constant score is reported honestly, never as a confident verdict.
+                emit(f"{dim}: spearman=n/a kappa=n/a trusted=False (uncalibratable labels)")
+            else:
+                emit(
+                    f"{dim}: spearman={result['spearman']:.3f} "
+                    f"kappa={result['kappa']:.3f} trusted={result['trusted']}"
+                )
         except StatisticsError as e:
-            # Constant arrays (e.g. judge stamped one score) or <2 points have no
-            # defined rank correlation. That is an UNCALIBRATED dim, not a pass —
-            # report it advisory-only with trusted=False; it still counts as an
-            # emitted report line for this dimension.
+            # A constant JUDGE score array (e.g. the judge stamped one score on every
+            # reference — a rubber stamp) has no defined rank correlation. That is an
+            # UNCALIBRATED dim, not a pass — report advisory-only with trusted=False;
+            # it still counts as an emitted report line for this dimension.
             result = {"spearman": None, "kappa": None, "trusted": False, "error": str(e)}
             emit(f"{dim}: spearman=n/a kappa=n/a trusted=False ({e})")
         reports[dim] = result
@@ -193,4 +222,6 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold) -> None:
     assert set(reports) == set(_JUDGED_DIMS), (
         "the harness must emit a calibration report for all four judged dimensions"
     )
-    assert judged_pairs > 0, "no calibration pairs survived — the judge harness produced no signal"
+    assert judged_points > 0, (
+        "no calibration points survived — the judge harness produced no signal"
+    )

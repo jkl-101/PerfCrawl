@@ -206,6 +206,13 @@ AI_MAX_RETRIES: int = 2
 # AI-SPEC §4: per-call output bound (three short fields) + a T-05-cost runaway guard.
 AI_MAX_TOKENS: int = 600
 
+# Phase 05.1 judge output bound. Deliberately HIGHER than AI_MAX_TOKENS (600): the
+# judge emits four per-dimension verdicts (PASS/FAIL + 1-5 score + <=400-char
+# rationale each), not the generator's single O/C/O triple, so it needs more room
+# before a max_tokens truncation degrades a pair to None. The judge imports THIS —
+# never inline the bound in tests/eval/judge.py (FM single-source-of-truth).
+JUDGE_MAX_TOKENS: int = 800
+
 # AI-SPEC §4: per-client request timeout, below the SDK's 10-min default so a hung
 # call degrades a page promptly instead of stalling the analyze pool.
 AI_REQUEST_TIMEOUT_S: float = 60.0

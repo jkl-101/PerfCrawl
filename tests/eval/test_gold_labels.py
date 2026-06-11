@@ -20,7 +20,6 @@ stay RED until the Task-2 developer checkpoint is satisfied — that is the inte
 state at the end of Task 1, not a regression.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -94,8 +93,73 @@ def test_prose_fixture_has_valid_gold(name: str, load_gold) -> None:
         assert 1 <= score <= 5, f"{name}.{dim}.score must be 1-5"
 
 
-def test_null_error_row_unlabeled(load_gold) -> None:
+def test_null_error_row_unlabeled(load_gold, load_anti_gold) -> None:
     """fully-null-error-row stays analysis=None with no authored prose (D-06)."""
     page = PageResult.model_validate_json(_fixture_text(NULL_ROW))
     assert page.analysis is None
     assert load_gold(NULL_ROW) is None, "the null error row carries no gold label (D-06)"
+    assert load_anti_gold(NULL_ROW) is None, "the null error row carries no anti_gold label (D-06)"
+
+
+@pytest.mark.parametrize("name", PROSE_FIXTURES)
+def test_prose_fixture_has_valid_anti_gold(name: str, load_anti_gold) -> None:
+    """Each prose fixture exposes an anti_gold: a FAIL-labeled deliberately-bad O/C/O.
+
+    The anti_gold is the NEGATIVE half of the calibration set (CR-01 fix). Without a
+    FAIL-labeled reference per dimension, Cohen's kappa can never expose a
+    rubber-stamp judge and the rank correlation has no score variance, so the trust
+    gate could never legitimately pass. Every judged dimension must therefore carry a
+    FAIL verdict with a 1-5 score.
+    """
+    anti = load_anti_gold(name)
+    assert anti is not None, f"{name} must carry an anti_gold (the FAIL half of calibration)"
+
+    for field in ("observation", "potential_cause", "suggested_optimization"):
+        value = anti.get(field)
+        assert isinstance(value, str) and value.strip(), f"{name}.anti_gold.{field} must be prose"
+
+    dims = anti.get("dimensions")
+    assert isinstance(dims, dict), f"{name}.anti_gold.dimensions must map the 4 judged dims"
+    for dim in JUDGED_DIMENSIONS:
+        sub = dims.get(dim)
+        assert isinstance(sub, dict), f"{name}.anti_gold.dimensions.{dim} missing"
+        assert sub.get("verdict") == "FAIL", (
+            f"{name}.anti_gold.{dim}.verdict must be FAIL — the anti_gold is the "
+            "negative reference; a PASS here defeats the rubber-stamp check"
+        )
+        score = sub.get("score")
+        assert isinstance(score, int) and not isinstance(score, bool), (
+            f"{name}.anti_gold.{dim}.score must be an int"
+        )
+        assert 1 <= score <= 5, f"{name}.anti_gold.{dim}.score must be 1-5"
+
+
+def test_dataset_is_calibratable_per_dimension(load_gold, load_anti_gold) -> None:
+    """The combined gold+anti_gold labels are CALIBRATABLE for every judged dim (CR-01).
+
+    This is the free, offline precondition guard the paid harness relies on: for each
+    dimension, the human labels across all prose fixtures must carry BOTH a PASS and a
+    FAIL call AND a non-constant score spread. If they don't, ``calibrate`` is
+    mathematically undefined (kappa degenerates, spearman raises) and the trust gate
+    becomes a meaningless always-deny — exactly the CR-01 bug. A future label edit
+    that re-flattens a dimension to all-PASS (or constant scores) fails HERE, for
+    free, instead of silently neutering the paid calibration run.
+    """
+    import calibrate  # tests/eval on sys.path (pytest prepend mode)
+
+    for dim in JUDGED_DIMENSIONS:
+        scores: list[float] = []
+        calls: list[str] = []
+        for name in PROSE_FIXTURES:
+            for ref in (load_gold(name), load_anti_gold(name)):
+                sub = (ref.get("dimensions") or {}).get(dim) or {}
+                scores.append(float(sub["score"]))
+                calls.append(sub["verdict"])
+        assert "PASS" in calls and "FAIL" in calls, (
+            f"dim {dim}: human labels must carry BOTH PASS and FAIL across gold+anti_gold "
+            "(else kappa can't expose rubber-stamping — CR-01)"
+        )
+        assert calibrate.is_calibratable(scores, calls), (
+            f"dim {dim}: combined gold+anti_gold labels are not calibratable "
+            "(need >=2 distinct calls AND >=2 distinct scores) — CR-01 precondition"
+        )

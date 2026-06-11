@@ -62,5 +62,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "LCP at 2,300 ms is the main concern — the page renders its hero too slowly — while the rest of the metrics look fine.",
+    "potential_cause": "A slow Vue.js mount and an under-provisioned Kubernetes pod are delaying the largest contentful paint.",
+    "suggested_optimization": "Preload the hero image, defer scripts, and scale up the server to fix the LCP.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

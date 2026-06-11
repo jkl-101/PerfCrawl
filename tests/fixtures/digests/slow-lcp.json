@@ -69,5 +69,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "CLS at 0.03 is shifting the layout and TBT looks elevated; these are the main issues to address on this page.",
+    "potential_cause": "A heavy Svelte transition and a slow CloudFront distribution are causing the jank and the delay.",
+    "suggested_optimization": "Reduce layout shifts, defer non-critical scripts, and tune your CDN.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

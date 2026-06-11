@@ -62,5 +62,28 @@
       "actionability": { "verdict": "PASS", "score": 4 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "The 800,000-byte payload is too heavy and the page's images are dragging down load time for users.",
+    "potential_cause": "Large unoptimized images and a bloated React bundle are slowing the page's first render.",
+    "suggested_optimization": "Compress images, lazy-load below-the-fold content, and minify the JavaScript.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

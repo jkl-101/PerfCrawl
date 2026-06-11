@@ -69,5 +69,28 @@
       "threshold_correctness": { "verdict": "PASS", "score": 5 },
       "actionability": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "CLS at 0.15 is the page's defining problem — the layout instability is what users will notice most.",
+    "potential_cause": "A misbehaving React reconciliation loop and a throttled AWS Lambda are causing the shifts and the delays.",
+    "suggested_optimization": "Fix the layout shifts, reduce re-renders, and optimize your serverless functions.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

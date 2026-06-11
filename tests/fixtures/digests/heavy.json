@@ -69,5 +69,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "CLS at 0.08 is the headline problem and is shifting the layout; the load otherwise looks acceptable for a page of this kind.",
+    "potential_cause": "A bloated React component tree and an overworked Express backend are causing the instability and the render delay.",
+    "suggested_optimization": "Reduce layout shifts, optimize your JavaScript, and improve server response times.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

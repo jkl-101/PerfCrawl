@@ -45,5 +45,28 @@
       "actionability": { "verdict": "PASS", "score": 4 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "LCP is clearly too high and the page is loading slowly for users on this route.",
+    "potential_cause": "A slow Gatsby build and an overloaded MySQL database are behind the poor load time.",
+    "suggested_optimization": "Optimize the database, reduce image sizes, and improve the build pipeline.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
   }
 }

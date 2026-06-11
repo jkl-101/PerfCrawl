@@ -69,5 +69,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "CLS 0.05 is the standout problem and the layout is visibly unstable on load.",
+    "potential_cause": "The Django template rendering and a slow Redis cache are the root cause of the slowdown.",
+    "suggested_optimization": "Optimize the backend, reduce the layout shift, and add caching.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }

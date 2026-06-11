@@ -62,5 +62,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "LCP at 2,500 ms is already in poor territory and the CLS of 0.10 is producing noticeable layout shift — the page is struggling on the core vitals.",
+    "potential_cause": "A heavy React hydration step and a slow Fastly CDN edge are delaying first paint and shifting content as components mount.",
+    "suggested_optimization": "Reduce JavaScript, optimize images, and improve caching to bring the Core Web Vitals down into the good range.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
   }
 }

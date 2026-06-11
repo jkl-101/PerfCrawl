@@ -69,5 +69,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "Despite the 98 performance score, the 1,200 ms LCP shows the page is loading slowly and users will notice the delay before content appears.",
+    "potential_cause": "The Angular framework's change-detection cycle and a cold CDN cache are the likely culprits behind the slow render.",
+    "suggested_optimization": "Lazy-load images, reduce third-party scripts, and tune the cache to improve perceived load speed.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 2
+      }
+    }
   }
 }

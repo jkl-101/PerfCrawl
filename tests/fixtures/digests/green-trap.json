@@ -55,5 +55,28 @@
       "actionability": { "verdict": "PASS", "score": 5 },
       "prioritization": { "verdict": "PASS", "score": 5 }
     }
+  },
+  "anti_gold": {
+    "observation": "LCP 1,100 ms is fine, but CLS and overall responsiveness still need work, and /static/about.css at 120 ms is the slowest asset and a clear bottleneck to fix.",
+    "potential_cause": "An unoptimized Webpack build and a misconfigured nginx server are inflating CSS delivery and slowing the page.",
+    "suggested_optimization": "Minify the CSS, split the JavaScript bundles, and add a CDN to speed up asset delivery.",
+    "dimensions": {
+      "causal_plausibility": {
+        "verdict": "FAIL",
+        "score": 1
+      },
+      "threshold_correctness": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "actionability": {
+        "verdict": "FAIL",
+        "score": 2
+      },
+      "prioritization": {
+        "verdict": "FAIL",
+        "score": 1
+      }
+    }
   }
 }
