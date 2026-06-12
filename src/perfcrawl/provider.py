@@ -17,8 +17,10 @@ Two impls:
     ``max_tokens``).
   - ``OpenAIProvider`` — the three call-shape deltas (RESEARCH Pitfalls 1-3): no
     sampling-temp key (the reasoning model rejects it; ``reasoning_effort`` is set
-    to ``"minimal"`` instead), ``max_completion_tokens`` (NOT ``max_tokens``), a
-    plain-string system message (NO ``cache_control`` — OpenAI auto prefix-caches).
+    to the single-source ``OPENAI_REASONING_EFFORT`` = ``"low"`` — the cross-model
+    floor, since ``"minimal"`` 400s on the gpt-5.5 judge), ``max_completion_tokens``
+    (NOT ``max_tokens``), a plain-string system message (NO ``cache_control`` —
+    OpenAI auto prefix-caches).
 
 Both degrade to ``None`` on SDK error / refusal / truncation — they NEVER crash
 the run (D-09). No app-level retry loop (D-11 — the SDK owns ``max_retries``).
@@ -48,6 +50,7 @@ from perfcrawl.constants import (
     ANTHROPIC_API_KEY_ENV,
     OPENAI_AI_MAX_TOKENS,
     OPENAI_API_KEY_ENV,
+    OPENAI_REASONING_EFFORT,
     PROVIDERS,
 )
 from perfcrawl.orchestrator import UserError  # reuse — never define a new error type
@@ -150,7 +153,9 @@ class OpenAIProvider:
             completion = self._client.chat.completions.parse(
                 model=model,
                 # Pitfall 1: NO temperature — the gpt-5 family 400s on it.
-                reasoning_effort="minimal",
+                # reasoning_effort is the single-source cross-model floor (constants.py):
+                # "low" — "minimal" is gpt-5-mini-only and 400s on the gpt-5.5 judge.
+                reasoning_effort=OPENAI_REASONING_EFFORT,
                 # Pitfall 3: max_completion_tokens, NOT max_tokens.
                 max_completion_tokens=self._max_completion_tokens,
                 messages=[

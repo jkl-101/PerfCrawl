@@ -267,6 +267,15 @@ OPENAI_AI_MAX_TOKENS: int = 2000
 # first — do NOT reuse the Anthropic JUDGE_MAX_TOKENS (800).
 OPENAI_JUDGE_MAX_TOKENS: int = 3000
 
+# Pitfall-1 (corrected at execute time, 2026-06-12): the reasoning-effort floor that
+# MINIMIZES hidden-token spend while remaining valid across the whole shipped gpt-5
+# family. The research's original `"minimal"` is NOT cross-model: gpt-5.5 (judge)
+# rejects `"minimal"` (supports none/low/medium/high/xhigh) and gpt-5-mini (generator)
+# rejects `"none"` (supports minimal/low/medium/high). `"low"` is the only explicit
+# value BOTH accept — verified live against both ids. Re-pin here if a future model
+# drops `"low"`; single-source, every call site imports this by name.
+OPENAI_REASONING_EFFORT: str = "low"
+
 # D-03: the single-source provider registry every consumer imports. Maps a provider
 # NAME to its default generator model, independent judge model, and key-env NAME.
 # Anthropic entries reference the existing Phase-5 constants by name (never re-spell

@@ -8,7 +8,8 @@ network). They pin:
   - OpenAIProvider maps a mocked ``chat.completions.parse`` completion / refusal /
     truncation / error to ``AnalysisResult`` / ``None`` and sends the three
     call-shape deltas (NO temperature, ``max_completion_tokens``,
-    ``reasoning_effort="minimal"``, plain-string system, ``response_format``);
+    ``reasoning_effort=OPENAI_REASONING_EFFORT`` (``"low"`` — the cross-model floor),
+    plain-string system, ``response_format``);
   - the JudgeVerdict strict schema: a missing dimension or out-of-band score is a
     ``ValidationError`` — a missing dimension is a schema error, NOT a silent gap.
 
@@ -28,7 +29,7 @@ import openai
 import pytest
 from pydantic import ValidationError
 
-from perfcrawl.constants import OPENAI_AI_MAX_TOKENS
+from perfcrawl.constants import OPENAI_AI_MAX_TOKENS, OPENAI_REASONING_EFFORT
 from perfcrawl.models import AnalysisResult
 from perfcrawl.provider import AnthropicProvider, OpenAIProvider
 
@@ -268,8 +269,8 @@ def test_openai_provider_call_shape_deltas():
     # Pitfall 3: max_completion_tokens (the construction cap), NOT max_tokens.
     assert "max_tokens" not in kwargs
     assert kwargs["max_completion_tokens"] == OPENAI_AI_MAX_TOKENS
-    # Pitfall 1: reasoning_effort minimal.
-    assert kwargs["reasoning_effort"] == "minimal"
+    # Pitfall 1: reasoning_effort is the single-source cross-model floor ("low").
+    assert kwargs["reasoning_effort"] == OPENAI_REASONING_EFFORT
     # System content is a PLAIN STRING (no cache_control wrapper).
     system_msg = kwargs["messages"][0]
     assert system_msg["role"] == "system"
