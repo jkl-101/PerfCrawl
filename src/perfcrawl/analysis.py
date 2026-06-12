@@ -380,7 +380,16 @@ def analyze_run(
         _emit("AI analysis post-pass failed; continuing with no analysis")
 
     analyzed = 0
-    degraded = 0
+    # WR-02: if executor.map aborted mid-stream (a non-KeyboardInterrupt raise from
+    # build_digest or a future), pages past the failure never reached `processed`.
+    # Their analysis stays None (the default), but they MUST be counted as degraded so
+    # the AI-health summary always sums to len(data_pages) — otherwise a partial
+    # post-pass failure is misreported as healthier than it was (the degraded-fraction
+    # warning keys off attempted = analyzed + degraded, which would undercount).
+    dropped = len(data_pages) - len(processed)
+    degraded = dropped
+    if dropped:
+        _emit(f"AI analysis: {dropped} page(s) dropped before processing (counted as degraded)")
     violations = {"bare_inp": 0, "fabricated_number": 0, "out_of_evidence_entity": 0}
 
     for page, digest, result in processed:
