@@ -37,6 +37,7 @@ cap, env-var name, retry count, and timeout is imported BY NAME from
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -54,6 +55,31 @@ from perfcrawl.constants import (
     PROVIDERS,
 )
 from perfcrawl.orchestrator import UserError  # reuse — never define a new error type
+
+
+def _warn_bad_request(provider_label: str, model: str, exc: Exception) -> None:
+    """Surface a deterministic 4xx invalid-request once (WR-01).
+
+    A 400 (bad model id, an ``--ai-model`` that rejects ``reasoning_effort``, a
+    schema the model can't honor) fails IDENTICALLY for every page, so the
+    degrade-to-None contract would otherwise report "all pages degraded" with no
+    hint that the cause was a bad invocation rather than a transient outage. Emit
+    one ``RuntimeWarning`` (Python's default filter shows it once per call site, so
+    an N-page run warns once). We include only the model + exception type + status +
+    offending param — NEVER ``str(exc)``: provider.py has no scrubber, and the body
+    could in principle echo request content. The param NAME (e.g. ``reasoning_effort``)
+    is safe and is exactly what a misconfigured run needs to self-diagnose.
+    """
+    status = getattr(exc, "status_code", "?")
+    param = getattr(exc, "param", None) or getattr(exc, "code", None)
+    detail = f" param={param}" if param else ""
+    warnings.warn(
+        f"{provider_label} request rejected (model={model!r}, "
+        f"{type(exc).__name__} {status}{detail}); this page degraded to no-analysis. "
+        f"Check --ai-model / model params.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 class Provider(Protocol):
@@ -113,9 +139,13 @@ class AnthropicProvider:
                 output_format=output_model,
             )
             return resp.parsed_output
-        except anthropic.APIError:
+        except anthropic.BadRequestError as e:
+            # WR-01/IN-02: a 4xx invalid-request is deterministic (bad model id, a
+            # schema the model can't honor) — surface it once instead of silently
+            # degrading every page. Still returns None: the run never crashes (D-09).
+            _warn_bad_request("Anthropic", model, e)
             return None
-        except Exception:  # defense-in-depth — never crash the run/harness
+        except Exception:  # transient API error / refusal / SDK shape — degrade, never crash
             return None
 
 
@@ -171,9 +201,13 @@ class OpenAIProvider:
             if getattr(msg, "refusal", None):
                 return None
             return msg.parsed
-        except openai.OpenAIError:
+        except openai.BadRequestError as e:
+            # WR-01: a 4xx invalid-request is deterministic (an --ai-model that rejects
+            # reasoning_effort, an unknown model id) — surface it once instead of
+            # letting degrade-to-None hide a 100%-broken run. Still returns None (D-09).
+            _warn_bad_request("OpenAI", model, e)
             return None
-        except Exception:  # defense-in-depth — never crash the run/harness
+        except Exception:  # transient API error / refusal / SDK shape — degrade, never crash
             return None
 
 

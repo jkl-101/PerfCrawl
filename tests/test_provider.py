@@ -62,6 +62,21 @@ def _dummy_openai_api_error() -> openai.OpenAIError:
     return openai.APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat"))
 
 
+def _dummy_openai_bad_request() -> openai.BadRequestError:
+    # A deterministic 4xx — the reasoning_effort/unknown-model-id class (WR-01).
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    return openai.BadRequestError(
+        "Unsupported value: 'reasoning_effort' (test)", response=response, body=None
+    )
+
+
+def _dummy_anthropic_bad_request() -> anthropic.BadRequestError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    return anthropic.BadRequestError("invalid model (test)", response=response, body=None)
+
+
 # --------------------------------------------------------------------------- #
 # AnthropicProvider doubles
 # --------------------------------------------------------------------------- #
@@ -183,6 +198,43 @@ def test_anthropic_provider_degrades_on_generic_exception():
         model="claude-x", max_tokens=600,
     )
     assert out is None
+
+
+def test_anthropic_provider_warns_and_degrades_on_bad_request():
+    # WR-01: a deterministic 4xx surfaces ONE RuntimeWarning and still degrades to None
+    # (the run never crashes) — a 100%-misconfigured run is visible, not silent.
+    provider = AnthropicProvider(FakeAnthropic(error=_dummy_anthropic_bad_request()))
+    with pytest.warns(RuntimeWarning, match="request rejected"):
+        out = provider.parse_structured(
+            system_text="R", user_text="d", output_model=AnalysisResult,
+            model="claude-x", max_tokens=600,
+        )
+    assert out is None
+
+
+def test_openai_provider_warns_and_degrades_on_bad_request():
+    # WR-01: the reasoning_effort / unknown-model-id 400 class — warn once, return None.
+    provider = OpenAIProvider(FakeOpenAI(error=_dummy_openai_bad_request()))
+    with pytest.warns(RuntimeWarning, match="request rejected"):
+        out = provider.parse_structured(
+            system_text="S", user_text="U", output_model=AnalysisResult,
+            model="gpt-5-mini", max_tokens=600,
+        )
+    assert out is None
+
+
+def test_openai_provider_bad_request_warning_names_the_param():
+    # The surfaced warning carries the offending param (reasoning_effort) + model so a
+    # misconfigured run self-diagnoses — but NOT the raw exception body (no scrubber here).
+    provider = OpenAIProvider(FakeOpenAI(error=_dummy_openai_bad_request()))
+    with pytest.warns(RuntimeWarning) as rec:
+        provider.parse_structured(
+            system_text="S", user_text="U", output_model=AnalysisResult,
+            model="gpt-5-mini", max_tokens=600,
+        )
+    msg = str(rec[0].message)
+    assert "gpt-5-mini" in msg
+    assert "BadRequestError" in msg
 
 
 def test_anthropic_provider_call_shape():
