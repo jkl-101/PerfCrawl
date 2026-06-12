@@ -191,6 +191,15 @@ def resolve_provider(flag: str | None, env: Mapping[str, str]) -> str:
     error message says so explicitly.
     """
     if flag:  # explicit wins
+        # CR-01: --ai-provider is a free-form str (no click.Choice), so guard the
+        # registry lookup BEFORE indexing it — a typo (`OpenAI`, `claude`, `gpt4`)
+        # must raise the reused UserError (→ ExitCode.USER_ERROR at both call sites),
+        # never an uncaught KeyError / raw traceback (D-01/D-02 fail-fast contract).
+        if flag not in PROVIDERS:
+            raise UserError(
+                f"--ai-provider {flag!r} is not recognized; "
+                f"expected one of {sorted(PROVIDERS)}"
+            )
         key_env = PROVIDERS[flag]["key_env"]
         if not env.get(key_env):
             raise UserError(

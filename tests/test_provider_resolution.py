@@ -66,3 +66,22 @@ def test_resolve_provider_no_key_at_all_raises():
     assert ANTHROPIC_API_KEY_ENV in msg
     assert OPENAI_API_KEY_ENV in msg
     assert "never a flag" in msg
+
+
+@pytest.mark.parametrize("bogus", ["bogus", "OpenAI", "claude", "gpt4"])
+def test_resolve_provider_invalid_flag_raises_usererror_not_keyerror(bogus):
+    # CR-01: an unrecognized (non-empty) --ai-provider value must fail with the reused
+    # UserError (clean USER_ERROR fail-fast), NOT an uncaught KeyError. The membership
+    # guard runs before any key lookup, so even with both keys present it raises.
+    with pytest.raises(UserError) as exc:
+        resolve_provider(bogus, {OPENAI_API_KEY_ENV: "o", ANTHROPIC_API_KEY_ENV: "a"})
+    assert "not recognized" in str(exc.value)
+
+
+def test_resolve_provider_empty_flag_is_falsy_autodetects():
+    # An empty string is falsy → treated as "no flag" → auto-detect (D-01 tie-break),
+    # NOT a typo. With both keys present this resolves to anthropic, never raises.
+    assert (
+        resolve_provider("", {OPENAI_API_KEY_ENV: "o", ANTHROPIC_API_KEY_ENV: "a"})
+        == "anthropic"
+    )
