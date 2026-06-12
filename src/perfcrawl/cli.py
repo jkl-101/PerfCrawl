@@ -162,8 +162,8 @@ def _run_ai_post_pass(
     the single-source retry budget + timeout — one thread-safe client shared across
     the bounded analyze pool (AI-SPEC Pitfall 4); the SDK owns retry (``max_retries``)
     and per-request timeout — never a hand-rolled loop (D-11). When ``ai_model`` is
-    omitted (None) the RESOLVED provider's ``default_model`` governs (so an OpenAI run
-    defaults to gpt-5-mini, an Anthropic run to claude-sonnet-4-6); an explicit
+    omitted (None) the RESOLVED provider's ``default_model`` governs (each provider's
+    ``PROVIDERS[name]["default_model"]`` — no model id is inlined here); an explicit
     ``--ai-model`` wins. The key-seeded ``scrub`` is threaded in so every
     degrade/grounding stderr line and the in-place-mutated ``analysis`` fields are
     redacted (AUTH-04 / T-05-redact / CR-01). ``analyze_run`` mutates
@@ -461,9 +461,13 @@ def measure(
     ai_model: str | None = typer.Option(
         None,
         "--ai-model",
-        help="Override the model for --ai analysis WITHIN the resolved provider "
-        "(default: the provider's cost-appropriate bulk model — claude-sonnet-4-6 "
-        "or gpt-5-mini; override with e.g. claude-opus-4-8).",
+        help=(
+            "Override the model for --ai analysis WITHIN the resolved provider "
+            "(default: the provider's cost-appropriate bulk model — "
+            f"{PROVIDERS['anthropic']['default_model']} or "
+            f"{PROVIDERS['openai']['default_model']}; override with e.g. "
+            f"{PROVIDERS['anthropic']['judge_model']})."
+        ),
     ),
     output_json: bool = typer.Option(
         False,
@@ -686,9 +690,13 @@ def crawl(
     ai_model: str | None = typer.Option(
         None,
         "--ai-model",
-        help="Override the model for --ai analysis WITHIN the resolved provider "
-        "(default: the provider's cost-appropriate bulk model — claude-sonnet-4-6 "
-        "or gpt-5-mini; override with e.g. claude-opus-4-8 for small high-value crawls).",
+        help=(
+            "Override the model for --ai analysis WITHIN the resolved provider "
+            "(default: the provider's cost-appropriate bulk model — "
+            f"{PROVIDERS['anthropic']['default_model']} or "
+            f"{PROVIDERS['openai']['default_model']}; override with e.g. "
+            f"{PROVIDERS['anthropic']['judge_model']} for small high-value crawls)."
+        ),
     ),
     output_dir: Path = typer.Option(
         Path("output"),
