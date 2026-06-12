@@ -77,6 +77,22 @@ def _dummy_anthropic_bad_request() -> anthropic.BadRequestError:
     return anthropic.BadRequestError("invalid model (test)", response=response, body=None)
 
 
+def _dummy_openai_auth_error() -> openai.AuthenticationError:
+    # 401 — a wrong/absent key (e.g. an OpenRouter sk-or-v1 key sent to api.openai.com).
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(401, request=request)
+    return openai.AuthenticationError(
+        "Incorrect API key provided (test)", response=response, body=None
+    )
+
+
+def _dummy_openai_rate_limit() -> openai.RateLimitError:
+    # 429 — transient; must NOT warn (the SDK already retried; a backoff is the answer).
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    return openai.RateLimitError("slow down (test)", response=response, body=None)
+
+
 # --------------------------------------------------------------------------- #
 # AnthropicProvider doubles
 # --------------------------------------------------------------------------- #
@@ -235,6 +251,34 @@ def test_openai_provider_bad_request_warning_names_the_param():
     msg = str(rec[0].message)
     assert "gpt-5-mini" in msg
     assert "BadRequestError" in msg
+
+
+def test_openai_provider_warns_and_degrades_on_auth_error_401():
+    # WR-01 widened: a 401 (wrong key — the live-UAT OpenRouter-key case) is a
+    # deterministic client error and must warn, not silently null every page.
+    provider = OpenAIProvider(FakeOpenAI(error=_dummy_openai_auth_error()))
+    with pytest.warns(RuntimeWarning) as rec:
+        out = provider.parse_structured(
+            system_text="S", user_text="U", output_model=AnalysisResult,
+            model="gpt-5-mini", max_tokens=600,
+        )
+    assert out is None
+    assert "AuthenticationError" in str(rec[0].message)
+
+
+def test_openai_provider_silent_degrade_on_rate_limit_429():
+    # WR-01 boundary: 429 is TRANSIENT (SDK already retried) — it must degrade
+    # SILENTLY, no warning, so retryable load shedding isn't mistaken for misconfig.
+    import warnings as _warnings
+
+    provider = OpenAIProvider(FakeOpenAI(error=_dummy_openai_rate_limit()))
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")  # any RuntimeWarning would raise here
+        out = provider.parse_structured(
+            system_text="S", user_text="U", output_model=AnalysisResult,
+            model="gpt-5-mini", max_tokens=600,
+        )
+    assert out is None
 
 
 def test_anthropic_provider_call_shape():

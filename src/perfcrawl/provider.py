@@ -57,18 +57,31 @@ from perfcrawl.constants import (
 from perfcrawl.orchestrator import UserError  # reuse — never define a new error type
 
 
-def _warn_bad_request(provider_label: str, model: str, exc: Exception) -> None:
-    """Surface a deterministic 4xx invalid-request once (WR-01).
+#: Deterministic client-error statuses worth surfacing: a 400 (bad request / bad
+#: params), 401 (wrong/absent key), 403 (no access), 404 (unknown model), 409, 422.
+#: These fail IDENTICALLY for every page — a config mistake, not an outage. 429
+#: (rate-limit) and 5xx are transient (the SDK already retried), so they stay silent
+#: degrade like a connection error. `400 <= status < 429` captures exactly the
+#: deterministic 4xx set and excludes 429.
+def _is_deterministic_client_error(status: int | None) -> bool:
+    return status is not None and 400 <= status < 429
 
-    A 400 (bad model id, an ``--ai-model`` that rejects ``reasoning_effort``, a
-    schema the model can't honor) fails IDENTICALLY for every page, so the
+
+def _warn_request_rejected(provider_label: str, model: str, exc: Exception) -> None:
+    """Surface a deterministic 4xx request rejection once (WR-01, widened).
+
+    A deterministic 4xx — 400 (bad model id / an ``--ai-model`` that rejects
+    ``reasoning_effort`` / a schema the model can't honor), 401 (wrong or absent
+    key, e.g. an OpenRouter ``sk-or-v1-…`` key sent to api.openai.com), 403 (no
+    access), 404 (unknown model) — fails IDENTICALLY for every page, so the
     degrade-to-None contract would otherwise report "all pages degraded" with no
     hint that the cause was a bad invocation rather than a transient outage. Emit
     one ``RuntimeWarning`` (Python's default filter shows it once per call site, so
     an N-page run warns once). We include only the model + exception type + status +
     offending param — NEVER ``str(exc)``: provider.py has no scrubber, and the body
-    could in principle echo request content. The param NAME (e.g. ``reasoning_effort``)
-    is safe and is exactly what a misconfigured run needs to self-diagnose.
+    can echo a (masked) key or request content. The exception TYPE (e.g.
+    ``AuthenticationError``) + status + param NAME is safe and is exactly what a
+    misconfigured run needs to self-diagnose.
     """
     status = getattr(exc, "status_code", "?")
     param = getattr(exc, "param", None) or getattr(exc, "code", None)
@@ -76,7 +89,7 @@ def _warn_bad_request(provider_label: str, model: str, exc: Exception) -> None:
     warnings.warn(
         f"{provider_label} request rejected (model={model!r}, "
         f"{type(exc).__name__} {status}{detail}); this page degraded to no-analysis. "
-        f"Check --ai-model / model params.",
+        f"Check the provider API key and --ai-model / params.",
         RuntimeWarning,
         stacklevel=2,
     )
@@ -139,13 +152,14 @@ class AnthropicProvider:
                 output_format=output_model,
             )
             return resp.parsed_output
-        except anthropic.BadRequestError as e:
-            # WR-01/IN-02: a 4xx invalid-request is deterministic (bad model id, a
-            # schema the model can't honor) — surface it once instead of silently
-            # degrading every page. Still returns None: the run never crashes (D-09).
-            _warn_bad_request("Anthropic", model, e)
+        except anthropic.APIStatusError as e:
+            # WR-01/IN-02 (widened): a deterministic 4xx (bad request, wrong key,
+            # no access, unknown model) is surfaced once; transient 429/5xx fall
+            # through to silent degrade. Always returns None: never crashes (D-09).
+            if _is_deterministic_client_error(getattr(e, "status_code", None)):
+                _warn_request_rejected("Anthropic", model, e)
             return None
-        except Exception:  # transient API error / refusal / SDK shape — degrade, never crash
+        except Exception:  # transient API/connection error / refusal / SDK shape — degrade
             return None
 
 
@@ -201,13 +215,15 @@ class OpenAIProvider:
             if getattr(msg, "refusal", None):
                 return None
             return msg.parsed
-        except openai.BadRequestError as e:
-            # WR-01: a 4xx invalid-request is deterministic (an --ai-model that rejects
-            # reasoning_effort, an unknown model id) — surface it once instead of
-            # letting degrade-to-None hide a 100%-broken run. Still returns None (D-09).
-            _warn_bad_request("OpenAI", model, e)
+        except openai.APIStatusError as e:
+            # WR-01 (widened): a deterministic 4xx — bad request (reasoning_effort /
+            # unknown model id), 401 wrong key (e.g. an OpenRouter key sent to
+            # api.openai.com), 403, 404 — is surfaced once; transient 429/5xx fall
+            # through to silent degrade. Still returns None (D-09, never crashes).
+            if _is_deterministic_client_error(getattr(e, "status_code", None)):
+                _warn_request_rejected("OpenAI", model, e)
             return None
-        except Exception:  # transient API error / refusal / SDK shape — degrade, never crash
+        except Exception:  # transient API/connection error / refusal / SDK shape — degrade
             return None
 
 
