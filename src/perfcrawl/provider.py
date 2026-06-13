@@ -180,9 +180,14 @@ class OpenAIProvider:
         client: openai.OpenAI,
         *,
         max_completion_tokens: int = OPENAI_AI_MAX_TOKENS,
+        send_reasoning_effort: bool = True,
     ) -> None:
         self._client = client
         self._max_completion_tokens = max_completion_tokens
+        # D-04: whether this endpoint accepts the gpt-5-family reasoning_effort kwarg.
+        # Default True preserves the native 05.2 gpt-5 path for any existing caller;
+        # build_provider sets it False for OpenRouter / any custom base_url endpoint.
+        self._send_reasoning_effort = send_reasoning_effort
 
     def parse_structured(
         self,
@@ -194,21 +199,31 @@ class OpenAIProvider:
         max_tokens: int,  # noqa: ARG002 — Pitfall 2: NOT used (see class docstring)
     ) -> BaseModel | None:
         try:
-            completion = self._client.chat.completions.parse(
-                model=model,
-                # Pitfall 1: NO temperature — the gpt-5 family 400s on it.
-                # reasoning_effort is the single-source cross-model floor (constants.py):
-                # "low" — "minimal" is gpt-5-mini-only and 400s on the gpt-5.5 judge.
-                reasoning_effort=OPENAI_REASONING_EFFORT,
+            # D-04: build the call kwargs conditionally on the capability flag. The
+            # native gpt-5 path keeps the 05.2 shape byte-for-byte (reasoning_effort,
+            # NO temperature); the portable path drops reasoning_effort (the cheap
+            # OpenRouter models 400 on it) and sends temperature=0 instead.
+            parse_kwargs: dict = {
+                "model": model,
                 # Pitfall 3: max_completion_tokens, NOT max_tokens.
-                max_completion_tokens=self._max_completion_tokens,
-                messages=[
+                "max_completion_tokens": self._max_completion_tokens,
+                "messages": [
                     # Plain string, NO cache_control — OpenAI auto prefix-caches.
                     {"role": "system", "content": system_text},
                     {"role": "user", "content": user_text},
                 ],
-                response_format=output_model,
-            )
+                "response_format": output_model,
+            }
+            if self._send_reasoning_effort:
+                # Pitfall 1: NO temperature — the gpt-5 family 400s on it.
+                # reasoning_effort is the single-source cross-model floor (constants.py):
+                # "low" — "minimal" is gpt-5-mini-only and 400s on the gpt-5.5 judge.
+                parse_kwargs["reasoning_effort"] = OPENAI_REASONING_EFFORT
+            else:
+                # Portable shape: temperature=0 is broadly accepted; reasoning_effort
+                # is omitted so a non-reasoning endpoint never 400s every page.
+                parse_kwargs["temperature"] = 0
+            completion = self._client.chat.completions.parse(**parse_kwargs)
             msg = completion.choices[0].message
             # Refusal / truncation → None, the SAME disposition the Anthropic path
             # gives a ``parsed_output is None`` (RESEARCH §degrade-to-None).
@@ -269,6 +284,7 @@ def build_provider(
     name: str,
     key: str,
     *,
+    base_url: str | None = None,
     openai_max_completion_tokens: int = OPENAI_AI_MAX_TOKENS,
 ) -> Provider:
     """Construct the concrete ``Provider`` for ``name`` with the single-source budget.
@@ -278,6 +294,13 @@ def build_provider(
     SDK owns the retry loop, D-11). The OpenAI client is given the completion-token
     cap (Pitfall 2): the generator lane defaults to ``OPENAI_AI_MAX_TOKENS``; the
     judge lane passes ``OPENAI_JUDGE_MAX_TOKENS`` via this arg.
+
+    D-04/D-01: ``base_url`` threads a custom OpenAI-compatible endpoint into the
+    SDK client. The effective base_url is the explicit ``base_url`` arg when given,
+    else the registry default (OpenRouter bakes its own). ``send_reasoning_effort``
+    is the registry capability flag AND requires no base_url override — so ANY
+    custom endpoint (including ``--ai-provider openai --ai-base-url <gw>``) takes
+    the portable call shape, closing the edge a pure registry flag would miss.
     """
     if name == "anthropic":
         return AnthropicProvider(
@@ -287,13 +310,20 @@ def build_provider(
                 timeout=AI_REQUEST_TIMEOUT_S,
             )
         )
-    if name == "openai":
+    if name in ("openai", "openrouter"):
+        cfg = PROVIDERS[name]
+        effective_base_url = base_url or cfg.get("base_url")
+        send_re = cfg.get("send_reasoning_effort", False) and (
+            effective_base_url is None
+        )
         return OpenAIProvider(
             openai.OpenAI(
                 api_key=key,
+                base_url=effective_base_url,
                 max_retries=AI_MAX_RETRIES,
                 timeout=AI_REQUEST_TIMEOUT_S,
             ),
             max_completion_tokens=openai_max_completion_tokens,
+            send_reasoning_effort=send_re,
         )
     raise UserError(f"unknown provider {name!r}; expected one of {sorted(PROVIDERS)}")
