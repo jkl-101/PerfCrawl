@@ -52,6 +52,7 @@ from perfcrawl.constants import (
     DEFAULT_SAMPLES_N,
     INP_PROXY_DISPLAY_LABEL,
     OPENAI_API_KEY_ENV,
+    OPENROUTER_API_KEY_ENV,
     PERFCRAWL_PASSWORD_ENV,
     PERFCRAWL_USERNAME_ENV,
     PROVIDERS,
@@ -151,7 +152,12 @@ def _resolve_crawl_auth(
 
 
 def _run_ai_post_pass(
-    run_record, *, ai_provider: str | None, ai_model: str | None, scrub
+    run_record,
+    *,
+    ai_provider: str | None,
+    ai_model: str | None,
+    ai_base_url: str | None = None,
+    scrub,
 ) -> dict:
     """Build the RESOLVED provider and run the ``analyze_run`` post-pass (D-01/D-02).
 
@@ -175,7 +181,9 @@ def _run_ai_post_pass(
     """
     provider_name = resolve_provider(ai_provider, os.environ)
     cfg = PROVIDERS[provider_name]
-    provider = build_provider(provider_name, os.environ[cfg["key_env"]])
+    provider = build_provider(
+        provider_name, os.environ[cfg["key_env"]], base_url=ai_base_url
+    )
     return analysis.analyze_run(
         run_record,
         provider=provider,
@@ -469,6 +477,15 @@ def measure(
             f"{PROVIDERS['anthropic']['judge_model']})."
         ),
     ),
+    ai_base_url: str | None = typer.Option(
+        None,
+        "--ai-base-url",
+        help=(
+            "Custom OpenAI-compatible endpoint base_url (escape hatch for LM Studio "
+            "/ Together / Groq / self-hosted); optional — the openrouter provider "
+            "bakes its own default. base_url is non-secret so a flag is fine (D-02)."
+        ),
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -491,9 +508,20 @@ def measure(
     if ai:
         _load_dotenv_if_present()
         try:
-            resolve_provider(ai_provider, os.environ)
+            resolved_provider = resolve_provider(ai_provider, os.environ)
         except UserError as e:
             err_console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+        # D-05: a custom --ai-base-url on the GENERIC openai provider without an
+        # explicit --ai-model would silently aim the OpenAI-specific default slug at
+        # a gateway that rejects it — degrading EVERY page. Fail fast at t=0 instead.
+        # The named openrouter provider is exempt: it ships a valid default slug.
+        if ai_base_url and resolved_provider == "openai" and ai_model is None:
+            err_console.print(
+                "[red]error:[/red] a custom --ai-base-url needs an explicit "
+                f"--ai-model; the default {PROVIDERS['openai']['default_model']} "
+                "is OpenAI-specific."
+            )
             raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
     # AUTH-04 / RESEARCH Pitfall 5 / CR-01: measure() had NO scrubber. When --ai is
@@ -507,6 +535,7 @@ def measure(
         make_scrubber(
             os.environ.get(ANTHROPIC_API_KEY_ENV),
             os.environ.get(OPENAI_API_KEY_ENV),
+            os.environ.get(OPENROUTER_API_KEY_ENV),
         )
         if ai
         else None
@@ -528,7 +557,11 @@ def measure(
     ai_summary = None
     if ai:
         ai_summary = _run_ai_post_pass(
-            run_record, ai_provider=ai_provider, ai_model=ai_model, scrub=scrub
+            run_record,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            ai_base_url=ai_base_url,
+            scrub=scrub,
         )
 
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
@@ -698,6 +731,15 @@ def crawl(
             f"{PROVIDERS['anthropic']['judge_model']} for small high-value crawls)."
         ),
     ),
+    ai_base_url: str | None = typer.Option(
+        None,
+        "--ai-base-url",
+        help=(
+            "Custom OpenAI-compatible endpoint base_url (escape hatch for LM Studio "
+            "/ Together / Groq / self-hosted); optional — the openrouter provider "
+            "bakes its own default. base_url is non-secret so a flag is fine (D-02)."
+        ),
+    ),
     output_dir: Path = typer.Option(
         Path("output"),
         "--output-dir",
@@ -753,9 +795,20 @@ def crawl(
     # crawl. Read AFTER the .env load above so a key in a gitignored .env counts.
     if ai:
         try:
-            resolve_provider(ai_provider, os.environ)
+            resolved_provider = resolve_provider(ai_provider, os.environ)
         except UserError as e:
             err_console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+        # D-05: a custom --ai-base-url on the GENERIC openai provider without an
+        # explicit --ai-model would silently aim the OpenAI-specific default slug at
+        # a gateway that rejects it — degrading EVERY page. Fail fast at t=0 instead.
+        # The named openrouter provider is exempt: it ships a valid default slug.
+        if ai_base_url and resolved_provider == "openai" and ai_model is None:
+            err_console.print(
+                "[red]error:[/red] a custom --ai-base-url needs an explicit "
+                f"--ai-model; the default {PROVIDERS['openai']['default_model']} "
+                "is OpenAI-specific."
+            )
             raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
     # Seed the central credential scrubber ONCE (D-07 / AUTH-04 / CR-01). Applied to
@@ -769,6 +822,7 @@ def crawl(
         password,
         os.environ.get(ANTHROPIC_API_KEY_ENV),
         os.environ.get(OPENAI_API_KEY_ENV),
+        os.environ.get(OPENROUTER_API_KEY_ENV),
     )
 
     success_rule: dict[str, str] | None = None
@@ -936,7 +990,11 @@ def crawl(
     ai_summary = None
     if ai:
         ai_summary = _run_ai_post_pass(
-            run_record, ai_provider=ai_provider, ai_model=ai_model, scrub=scrub
+            run_record,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            ai_base_url=ai_base_url,
+            scrub=scrub,
         )
 
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches

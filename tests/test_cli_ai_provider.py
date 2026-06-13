@@ -77,9 +77,10 @@ def _capture_build_provider(monkeypatch: pytest.MonkeyPatch) -> dict:
     """
     captured: dict = {}
 
-    def fake_build_provider(name, key, **_kw):
+    def fake_build_provider(name, key, **kw):
         captured["name"] = name
         captured["key"] = key
+        captured["base_url"] = kw.get("base_url")
         return _NoopProvider()
 
     monkeypatch.setattr("perfcrawl.cli.build_provider", fake_build_provider)
@@ -145,6 +146,7 @@ def _patch_crawl_measure(monkeypatch: pytest.MonkeyPatch) -> list:
 def _clear_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,3 +312,198 @@ def test_crawl_ai_provider_openai_missing_key_fails_fast(
     assert post_pass == [], "AI post-pass must never run on the D-02 fail-fast"
     assert measure_calls == [], "measurement must never run on the D-02 fail-fast"
     assert "OPENAI_API_KEY" in " ".join(result.stderr.split())
+
+
+# --------------------------------------------------------------------------- #
+# --ai-base-url (D-02) wiring + openrouter selection + D-05 fail-fast
+# --------------------------------------------------------------------------- #
+
+
+def test_measure_ai_base_url_threads_into_build_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-02: ``--ai-base-url`` is forwarded as ``base_url=`` into build_provider.
+
+    The openai provider with an EXPLICIT ``--ai-model`` (so the D-05 guard is
+    satisfied) threads the custom endpoint through to the concrete client builder.
+    """
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-TESTKEY")
+    _patch_measure_url(monkeypatch)
+    captured = _capture_build_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--ai",
+            "--ai-provider",
+            "openai",
+            "--ai-model",
+            "some/custom-model",
+            "--ai-base-url",
+            "http://localhost:1234/v1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert captured.get("base_url") == "http://localhost:1234/v1"
+
+
+def test_measure_ai_provider_openrouter_resolves_and_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-01/D-05: ``--ai-provider openrouter`` with only OPENROUTER_API_KEY Just Works.
+
+    Zero other config: no --ai-model, no --ai-base-url. The named provider ships a
+    valid default slug + baked base_url, so the common case requires nothing else and
+    the D-05 fail-fast is NOT triggered (openrouter is exempt).
+    """
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-TESTKEY")
+    _patch_measure_url(monkeypatch)
+    captured = _capture_build_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--ai",
+            "--ai-provider",
+            "openrouter",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert captured.get("name") == "openrouter"
+    assert captured.get("key") == "sk-or-v1-TESTKEY"
+
+
+def test_measure_ai_base_url_openai_without_model_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-05: a bare ``--ai-base-url`` on the generic openai provider WITHOUT
+    ``--ai-model`` exits USER_ERROR at t=0 — the post-pass and measurement never run.
+    """
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-TESTKEY")
+    measure_calls = _patch_measure_url(monkeypatch)
+    post_pass = _record_post_pass(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--ai",
+            "--ai-provider",
+            "openai",
+            "--ai-base-url",
+            "http://localhost:1234/v1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == int(ExitCode.USER_ERROR), result.stdout + result.stderr
+    assert post_pass == [], "AI post-pass must never run on the D-05 fail-fast"
+    assert measure_calls == [], "measurement must never run on the D-05 fail-fast"
+    msg = " ".join(result.stderr.split())
+    assert "--ai-base-url" in msg
+    assert "--ai-model" in msg
+
+
+def test_measure_ai_base_url_openrouter_exempt_from_d05(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """D-05 exemption: ``--ai-base-url`` on the openrouter provider WITHOUT --ai-model
+    does NOT fail fast — openrouter ships a valid default slug.
+    """
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-TESTKEY")
+    _patch_measure_url(monkeypatch)
+    captured = _capture_build_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--ai",
+            "--ai-provider",
+            "openrouter",
+            "--ai-base-url",
+            "https://openrouter.ai/api/v1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert captured.get("name") == "openrouter"
+    assert captured.get("base_url") == "https://openrouter.ai/api/v1"
+
+
+def test_crawl_ai_base_url_openai_without_model_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_server: str
+) -> None:
+    """D-05 on crawl: bare ``--ai-base-url`` on openai w/o --ai-model exits USER_ERROR."""
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-TESTKEY")
+    measure_calls = _patch_crawl_measure(monkeypatch)
+    post_pass = _record_post_pass(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--ai",
+            "--ai-provider",
+            "openai",
+            "--ai-base-url",
+            "http://localhost:1234/v1",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == int(ExitCode.USER_ERROR), result.stdout + result.stderr
+    assert post_pass == [], "AI post-pass must never run on the D-05 fail-fast"
+    assert measure_calls == [], "measurement must never run on the D-05 fail-fast"
+    msg = " ".join(result.stderr.split())
+    assert "--ai-base-url" in msg
+    assert "--ai-model" in msg
+
+
+def test_crawl_ai_base_url_threads_into_build_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_server: str
+) -> None:
+    """D-02 on crawl: ``--ai-base-url`` forwards as ``base_url=`` into build_provider."""
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-TESTKEY")
+    _patch_crawl_measure(monkeypatch)
+    captured = _capture_build_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--ai",
+            "--ai-provider",
+            "openrouter",
+            "--ai-base-url",
+            "https://openrouter.ai/api/v1",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert captured.get("name") == "openrouter"
+    assert captured.get("base_url") == "https://openrouter.ai/api/v1"
