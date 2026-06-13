@@ -20,6 +20,7 @@ client (the providers only call ``client.messages.parse`` /
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -468,6 +469,29 @@ def test_build_provider_openrouter_base_url_override_wins():
     provider = build_provider("openrouter", "k", base_url="https://other/v1")
     assert str(provider._client.base_url).rstrip("/") == "https://other/v1"
     assert provider._send_reasoning_effort is False
+
+
+# --------------------------------------------------------------------------- #
+# Single-source meta-test (CLAUDE.md hard rule + Phase-1 grep discipline).
+# Mirrors tests/test_cli.py::test_cli_source_has_no_bare_inp — provider.py must
+# reach the OpenRouter base_url host + default model slug ONLY via the constants
+# import, never as an inline literal.
+# --------------------------------------------------------------------------- #
+def test_provider_source_has_no_inline_base_url_or_slug():
+    import perfcrawl.provider as provider_module
+
+    src = inspect.getsource(provider_module)
+    # Strip pure-comment lines so a header comment mentioning the host/slug cannot
+    # self-invalidate the gate — only the executable source body must be clean.
+    code = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "openrouter.ai" not in code, (
+        "provider.py must reach the OpenRouter host only via OPENROUTER_BASE_URL"
+    )
+    assert "gpt-4o-mini" not in code, (
+        "provider.py must reach the OpenRouter slug only via the constant"
+    )
 
 
 # --------------------------------------------------------------------------- #
