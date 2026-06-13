@@ -446,6 +446,40 @@ def test_measure_ai_base_url_openrouter_exempt_from_d05(
     assert captured.get("base_url") == "https://openrouter.ai/api/v1"
 
 
+def test_measure_ai_base_url_anthropic_fails_fast(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """WR-01: ``--ai-base-url`` on the anthropic provider exits USER_ERROR at t=0
+    rather than silently dropping the flag (the anthropic adapter ignores base_url,
+    so honoring it would route to api.anthropic.com against the user's intent).
+    """
+    _clear_keys(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-TESTKEY")
+    measure_calls = _patch_measure_url(monkeypatch)
+    post_pass = _record_post_pass(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--ai",
+            "--ai-provider",
+            "anthropic",
+            "--ai-base-url",
+            "http://localhost:1234/v1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == int(ExitCode.USER_ERROR), result.stdout + result.stderr
+    assert post_pass == [], "AI post-pass must never run on the WR-01 fail-fast"
+    assert measure_calls == [], "measurement must never run on the WR-01 fail-fast"
+    msg = " ".join(result.stderr.split())
+    assert "--ai-base-url" in msg
+    assert "anthropic" in msg
+
+
 def test_crawl_ai_base_url_openai_without_model_fails_fast(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_server: str
 ) -> None:

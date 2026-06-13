@@ -58,7 +58,10 @@ DIGEST_FIXTURES_DIR = FIXTURES_DIR / "digests"
 # --------------------------------------------------------------------------- #
 
 # Endpoint env vars the OpenAI SDK / config may auto-read (Pitfall 4).
-_ENDPOINT_ENV_VARS = ("OPENAI_BASE_URL", "OPENROUTER_BASE_URL")
+# ANTHROPIC_BASE_URL is included for completeness/defense-in-depth so the
+# hermetic guarantee covers every provider's endpoint var, not just the
+# OpenAI-compatible ones.
+_ENDPOINT_ENV_VARS = ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL")
 _KEY_ENV_VARS = (ANTHROPIC_API_KEY_ENV, OPENAI_API_KEY_ENV, OPENROUTER_API_KEY_ENV)
 
 

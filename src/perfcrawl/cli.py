@@ -462,9 +462,10 @@ def measure(
     ai_provider: str | None = typer.Option(
         None,
         "--ai-provider",
-        help="anthropic | openai. Optional — omit to auto-detect from whichever "
-        "key is in the env (Anthropic wins when both present, D-01). The key is "
-        "env-only, NEVER a flag (D-02).",
+        help="anthropic | openai | openrouter. Optional — omit to auto-detect "
+        "from whichever key is in the env (Anthropic wins when both present, "
+        "D-01; openrouter is opt-in via this flag, never auto-detected, D-03). "
+        "The key is env-only, NEVER a flag (D-02).",
     ),
     ai_model: str | None = typer.Option(
         None,
@@ -511,6 +512,17 @@ def measure(
             resolved_provider = resolve_provider(ai_provider, os.environ)
         except UserError as e:
             err_console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+        # WR-01: the anthropic adapter ignores base_url entirely — silently
+        # honoring --ai-base-url on anthropic would send traffic to
+        # api.anthropic.com while the user believes they're routing through a
+        # gateway. Fail fast instead of dropping the flag.
+        if ai_base_url and resolved_provider == "anthropic":
+            err_console.print(
+                "[red]error:[/red] --ai-base-url is not supported with the "
+                "anthropic provider; use --ai-provider openai or openrouter "
+                "for a custom OpenAI-compatible endpoint."
+            )
             raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
         # D-05: a custom --ai-base-url on the GENERIC openai provider without an
         # explicit --ai-model would silently aim the OpenAI-specific default slug at
@@ -716,9 +728,10 @@ def crawl(
     ai_provider: str | None = typer.Option(
         None,
         "--ai-provider",
-        help="anthropic | openai. Optional — omit to auto-detect from whichever "
-        "key is in the env (Anthropic wins when both present, D-01). The key is "
-        "env-only, NEVER a flag (D-02).",
+        help="anthropic | openai | openrouter. Optional — omit to auto-detect "
+        "from whichever key is in the env (Anthropic wins when both present, "
+        "D-01; openrouter is opt-in via this flag, never auto-detected, D-03). "
+        "The key is env-only, NEVER a flag (D-02).",
     ),
     ai_model: str | None = typer.Option(
         None,
@@ -798,6 +811,17 @@ def crawl(
             resolved_provider = resolve_provider(ai_provider, os.environ)
         except UserError as e:
             err_console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+        # WR-01: the anthropic adapter ignores base_url entirely — silently
+        # honoring --ai-base-url on anthropic would send traffic to
+        # api.anthropic.com while the user believes they're routing through a
+        # gateway. Fail fast instead of dropping the flag.
+        if ai_base_url and resolved_provider == "anthropic":
+            err_console.print(
+                "[red]error:[/red] --ai-base-url is not supported with the "
+                "anthropic provider; use --ai-provider openai or openrouter "
+                "for a custom OpenAI-compatible endpoint."
+            )
             raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
         # D-05: a custom --ai-base-url on the GENERIC openai provider without an
         # explicit --ai-model would silently aim the OpenAI-specific default slug at
