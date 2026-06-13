@@ -12,8 +12,20 @@ double-gated:
   - ``pytest.mark.llm``  — default ``addopts = -m 'not e2e and not llm'`` deselects
     it on a bare ``uv run pytest`` (D-02: the judge NEVER fires on a normal
     commit/PR — denial-of-wallet mitigation T-05.1-11).
-  - ``skipif(no ANTHROPIC_API_KEY)`` — belt-and-braces, so an explicit ``-m llm``
-    WITHOUT a key SKIPS cleanly instead of erroring on a missing key.
+  - ``skipif(no OPENAI_API_KEY and no ANTHROPIC_API_KEY)`` — belt-and-braces, so an
+    explicit ``-m llm`` WITHOUT either provider key SKIPS cleanly instead of
+    erroring on a missing key.
+
+PROVIDER RESOLUTION (Phase 05.2 / D-06): the harness is generalized from
+Anthropic-only to the RESOLVED judge provider. It prefers ``OPENAI_API_KEY`` (the
+available key — the OpenAI calibration run is the REQUIRED phase-closing
+deliverable, ``gpt-5.5`` grading ``gpt-5-mini``) and falls back to
+``ANTHROPIC_API_KEY`` (the Claude run, which stays deferred and skips cleanly when
+that key is absent). The judge client is built through the single
+``build_provider`` seam (D-04) and the judge model comes from
+``PROVIDERS[name]["judge_model"]`` — never an inlined model id. Generator/grader
+independence is preserved per provider exactly as opus-judges-sonnet: a stronger
+flagship grades a cheaper generator on one key.
 
 CR-01 FIX — grade the LABELED text, against a calibratable label set. The earlier
 design re-generated an analysis with ``analyze_page`` and then correlated the
@@ -32,8 +44,9 @@ The harness's only hard assertion is that it ran and emitted a calibration repor
 for all four judged dimensions, NOT that all four clear the 0.70 bar.
 
 Every printed line is routed through the AUTH-04 ``make_scrubber`` seeded with the
-key (T-05.1-10): the judge prompt and the calibration report could otherwise leak
-``ANTHROPIC_API_KEY`` into pytest's captured output.
+ACTIVE provider's key (T-05.1-10): the judge prompt and the calibration report
+could otherwise leak ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` into pytest's
+captured output.
 
 Independence: the graded texts are human-authored references (gold) and
 human-reviewed deliberately-bad references (anti_gold), never the judge's own
@@ -49,24 +62,45 @@ import os
 from pathlib import Path
 from statistics import StatisticsError
 
-import anthropic
 import calibrate as calibrate_mod  # tests/eval on sys.path (pytest prepend mode)
 import judge as judge_mod
 import pytest
 
 from perfcrawl import analysis
 from perfcrawl.auth import make_scrubber
-from perfcrawl.constants import AI_MAX_RETRIES, AI_REQUEST_TIMEOUT_S, ANTHROPIC_API_KEY_ENV
+from perfcrawl.constants import (
+    ANTHROPIC_API_KEY_ENV,
+    OPENAI_API_KEY_ENV,
+    OPENAI_JUDGE_MAX_TOKENS,
+    PROVIDERS,
+)
+from perfcrawl.provider import build_provider
 
 # Double gate: the marker deselects by default; skipif is the no-key safety net so
-# an explicit `-m llm` without a key skips rather than erroring (AI-SPEC §3 P1).
+# an explicit `-m llm` without EITHER provider key skips rather than erroring
+# (AI-SPEC §3 P1). Generalized from Anthropic-only to "no OpenAI key AND no
+# Anthropic key" — the run proceeds when either is present (D-06).
 pytestmark = [
     pytest.mark.llm,
     pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"),
-        reason="judge needs ANTHROPIC_API_KEY",
+        not os.environ.get(OPENAI_API_KEY_ENV) and not os.environ.get(ANTHROPIC_API_KEY_ENV),
+        reason=f"judge needs {OPENAI_API_KEY_ENV} or {ANTHROPIC_API_KEY_ENV}",
     ),
 ]
+
+
+def _resolve_judge_provider() -> tuple[str, str]:
+    """Resolve ``(provider_name, key)`` for the judge — OpenAI-preferred (D-06).
+
+    Prefers ``OPENAI_API_KEY`` (the available key driving the REQUIRED calibration
+    run), falls back to ``ANTHROPIC_API_KEY`` (the deferred Claude run). The
+    ``skipif`` above guarantees at least one is present, so this never returns
+    without a key under a real ``-m llm`` invocation.
+    """
+    openai_key = os.environ.get(OPENAI_API_KEY_ENV)
+    if openai_key:
+        return "openai", openai_key
+    return "anthropic", os.environ[ANTHROPIC_API_KEY_ENV]
 
 # The four subjective dimensions the judge grades (dims 6-9). The keys are the
 # JudgeVerdict attribute names AND the gold-label `dimensions` keys (they match by
@@ -100,7 +134,7 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold, load_anti_
 
     For each human-labeled fixture: ``build_digest`` → for EACH labeled reference
     (the ``gold`` PASS answer and the ``anti_gold`` FAIL answer) render its O/C/O
-    and ``judge_pair`` it on the opus judge client, always against the gold text as
+    and ``judge_pair`` it on the resolved judge provider, always against the gold text as
     the ``<gold_reference>``. The judge therefore grades the SAME text the human
     labeled (CR-01 fix), and every dimension accumulates both a PASS point (gold)
     and a FAIL point (anti_gold) with a 1-5 score spread — the calibratable shape.
@@ -113,7 +147,10 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold, load_anti_
     whose labels are uncalibratable) is reported but never fails the test. The only
     assertion is that a calibration report was emitted for all four judged dimensions.
     """
-    key = os.environ[ANTHROPIC_API_KEY_ENV]
+    # Resolve the active judge provider (OpenAI-preferred, D-06) and seed the
+    # scrubber with ITS key — the judge-lane key-bearing sink (Pitfall 4 /
+    # T-05.1-10): the prompt + report must not leak the active provider's key.
+    provider_name, key = _resolve_judge_provider()
     scrub = make_scrubber(key)
 
     def emit(line: str) -> None:
@@ -121,14 +158,19 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold, load_anti_
         # survive into pytest's captured stdout.
         print(scrub(line))
 
-    # One opus judge client. Mirror the production client tuning
-    # (cli._run_ai_post_pass): a bounded retry budget + a per-request timeout below
-    # the SDK's 10-min default so a hung judge call degrades that point promptly
-    # instead of stalling the whole harness. Sequential calls warm the JUDGE_RUBRIC
-    # prompt cache on the first pair.
-    judge_client = anthropic.Anthropic(
-        api_key=key, max_retries=AI_MAX_RETRIES, timeout=AI_REQUEST_TIMEOUT_S
+    # One judge client via the single provider seam (D-04). build_provider tunes the
+    # SDK client like cli._run_ai_post_pass (bounded retry budget + per-request
+    # timeout below the SDK's 10-min default so a hung judge call degrades that
+    # point promptly instead of stalling the harness). The OpenAI judge lane gets
+    # OPENAI_JUDGE_MAX_TOKENS (Pitfall 2 — reasoning tokens are spent before the
+    # visible answer); the kwarg is ignored for the Anthropic impl. Sequential calls
+    # warm the JUDGE_RUBRIC prompt cache on the first pair.
+    judge_provider = build_provider(
+        provider_name, key, openai_max_completion_tokens=OPENAI_JUDGE_MAX_TOKENS
     )
+    # The independent grader tier for this provider (gpt-5.5 over gpt-5-mini, or
+    # opus over sonnet) — never an inlined model id (single-source, constants.py).
+    judge_model = PROVIDERS[provider_name]["judge_model"]
 
     # Per-dimension parallel arrays of (judge_score, human_score, judge_call, human_call),
     # accumulated over every labeled reference (gold + anti_gold) the judge graded.
@@ -168,10 +210,11 @@ def test_judge_calibration_build_and_run_once(digest_page, load_gold, load_anti_
                 ref.get("suggested_optimization"),
             )
             verdict = judge_mod.judge_pair(
-                judge_client,
+                judge_provider,
                 digest_text=digest_text,
                 analysis_text=ref_text,
                 gold_label_text=gold_text,
+                model=judge_model,
             )
             if verdict is None:
                 # A degraded judge call is a dropped point, never a fabricated verdict.

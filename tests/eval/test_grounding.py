@@ -24,6 +24,7 @@ from perfcrawl.auth import make_scrubber
 from perfcrawl.cli import _format_calibration_note
 from perfcrawl.models import AnalysisResult, PageResult, RunRecord
 from perfcrawl.output import write_outputs
+from perfcrawl.provider import AnthropicProvider
 
 TEST_KEY = "sk-ant-TESTKEY"
 
@@ -47,7 +48,7 @@ def test_null_short_circuit(digest_page, fake_anthropic_good) -> None:
     error_row = digest_page("fully-null-error-row")
     run = _run_with([error_row])
 
-    analysis.analyze_run(run, client=fake_anthropic_good, scrub=lambda t: t)
+    analysis.analyze_run(run, provider=AnthropicProvider(fake_anthropic_good), scrub=lambda t: t)
 
     assert run.pages[0].analysis is None, "error row must short-circuit to analysis=None"
     assert fake_anthropic_good.call_count == 0, (
@@ -75,7 +76,9 @@ def test_degrade(
 
     # APIError variant → both data pages degrade; run completes; counts correct.
     run = _run_with([digest_page(n) for n in data_pages] + [digest_page("fully-null-error-row")])
-    summary = analysis.analyze_run(run, client=fake_anthropic_error, scrub=lambda t: t)
+    summary = analysis.analyze_run(
+        run, provider=AnthropicProvider(fake_anthropic_error), scrub=lambda t: t
+    )
     assert all(p.analysis is None for p in run.pages), "APIError must degrade every page to None"
     assert summary["degraded"] == 2, summary
     assert summary["insufficient"] == 1, summary
@@ -83,13 +86,17 @@ def test_degrade(
 
     # Refusal/None variant → identical degrade behavior.
     run_none = _run_with([digest_page(n) for n in data_pages])
-    summary_none = analysis.analyze_run(run_none, client=fake_anthropic_none, scrub=lambda t: t)
+    summary_none = analysis.analyze_run(
+        run_none, provider=AnthropicProvider(fake_anthropic_none), scrub=lambda t: t
+    )
     assert all(p.analysis is None for p in run_none.pages)
     assert summary_none["degraded"] == 2, summary_none
 
     # Working client → the SAME pages get a real analysis (others-get-a-result).
     run_ok = _run_with([digest_page(n) for n in data_pages])
-    summary_ok = analysis.analyze_run(run_ok, client=fake_anthropic_good, scrub=lambda t: t)
+    summary_ok = analysis.analyze_run(
+        run_ok, provider=AnthropicProvider(fake_anthropic_good), scrub=lambda t: t
+    )
     assert all(p.analysis is not None for p in run_ok.pages), "a working client must analyze pages"
     assert summary_ok["analyzed"] == 2, summary_ok
 
@@ -102,7 +109,7 @@ def test_degrade(
 def test_good_page_schema_valid(digest_page, fake_anthropic_good) -> None:
     """A good page through ``analyze_run`` yields a schema-valid ``AnalysisResult``."""
     run = _run_with([digest_page("healthy-all-green")])
-    analysis.analyze_run(run, client=fake_anthropic_good, scrub=lambda t: t)
+    analysis.analyze_run(run, provider=AnthropicProvider(fake_anthropic_good), scrub=lambda t: t)
     result = run.pages[0].analysis
     assert isinstance(result, AnalysisResult), "analysis must be a schema-valid AnalysisResult"
 
@@ -271,3 +278,36 @@ def test_no_unsupported_entity() -> None:
         "The slowest request is /static/main.js at the listed timing.", digest
     )
     assert grounded == [], "text citing only digest evidence must NOT be flagged"
+
+
+# --------------------------------------------------------------------------- #
+# WR-02: a mid-map build_digest failure must not vanish from the health counts
+# --------------------------------------------------------------------------- #
+
+
+def test_dropped_pages_counted_as_degraded(monkeypatch, digest_page, fake_anthropic_good) -> None:
+    """If build_digest raises mid executor.map, the pages past the failure never reach
+    `processed` — but analyzed + degraded must still equal the data-page count, so a
+    partial post-pass failure is never misreported as healthier than it was (WR-02)."""
+    pages = [digest_page(n) for n in ("healthy-all-green", "slow-lcp", "high-tbt", "high-cls")]
+    run = _run_with(pages)
+    n_data = len(pages)  # all four are non-error data pages
+
+    real_build_digest = analysis.build_digest
+    boom_url = pages[1].url  # raise on the 2nd page → it + every later page drop
+
+    def flaky_build_digest(page):
+        if page.url == boom_url:
+            raise RuntimeError("digest boom (test)")
+        return real_build_digest(page)
+
+    monkeypatch.setattr(analysis, "build_digest", flaky_build_digest)
+
+    health = analysis.analyze_run(
+        run, provider=AnthropicProvider(fake_anthropic_good), scrub=lambda t: t
+    )
+
+    # The invariant WR-02 restores: every data page is accounted for. Pre-fix this
+    # summed to just the pages that completed (1), silently dropping the other 3.
+    assert health["analyzed"] + health["degraded"] == n_data
+    assert health["degraded"] >= 1, "the dropped pages must land in the degraded count"

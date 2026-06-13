@@ -1,11 +1,12 @@
 """Phase-5 AI analysis — the public contract (Wave-0 stub).
 
 This module is the per-page AI-enrichment seam: it turns each measured
-``PageResult`` into a deterministic metric *digest*, dispatches one stateless,
-prompt-cached ``client.messages.parse(output_format=AnalysisResult)`` call per
-page through a bounded pool, and writes the grounded ``AnalysisResult`` (or a
-clean ``None``) back onto ``page.analysis`` — which the unchanged
-``output.write_outputs`` / ``store.write_run`` path then serializes for free.
+``PageResult`` into a deterministic metric *digest*, dispatches one stateless
+structured-output call per page through the provider-agnostic
+``Provider.parse_structured(output_model=AnalysisResult)`` seam (D-04) via a
+bounded pool, and writes the grounded ``AnalysisResult`` (or a clean ``None``)
+back onto ``page.analysis`` — which the unchanged ``output.write_outputs`` /
+``store.write_run`` path then serializes for free.
 
 **This file is an interface-first CONTRACT STUB.** Every public name the test
 harness imports exists here, but the request/response bodies raise
@@ -15,7 +16,7 @@ between this plan's RED tests and the Plan-02 implementation:
 
   - ``build_digest(page)``         — deterministic, sorted, timestamp-free digest text
   - ``RUBRIC``                     — the frozen ≥1,024-token cite-the-numbers system prefix
-  - ``analyze_page(client, ...)``  — one structured-output call; degrades to ``None`` (D-09)
+  - ``analyze_page(provider, ...)`` — one structured-output call; degrades to ``None`` (D-09)
   - ``analyze_run(run_record, ...)`` — bounded-pool driver + per-run summary counts (D-03/D-06/D-09)
   - ``check_no_bare_inp`` / ``find_fabricated_numbers`` / ``find_unsupported_entities``
         — the grounding PURE functions, run both in CI (eval) and at runtime (pre-write guardrails)
@@ -38,7 +39,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
-import anthropic
 from rich.console import Console
 
 from perfcrawl.constants import (
@@ -49,6 +49,7 @@ from perfcrawl.constants import (
 )
 from perfcrawl.crawl import is_error_row
 from perfcrawl.models import AnalysisResult, PageResult
+from perfcrawl.provider import Provider
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import for annotations
     from perfcrawl.models import RunRecord, WaterfallEntry
@@ -270,44 +271,32 @@ def build_digest(page: PageResult) -> str:
     return "\n".join(lines)
 
 
-def analyze_page(
-    client: anthropic.Anthropic,
-    digest_text: str,
-    model: str = DEFAULT_AI_MODEL,
-) -> AnalysisResult | None:
+def analyze_page(provider: Provider, digest_text: str, model: str) -> AnalysisResult | None:
     """Run one structured-output call for ``digest_text``; degrade to ``None`` (D-09).
 
-    ``client.messages.parse(model=..., max_tokens=AI_MAX_TOKENS, temperature=0,
-    system=[{RUBRIC, cache_control: ephemeral}], messages=[{user, digest_text}],
-    output_format=AnalysisResult)`` → ``resp.parsed_output``. The static RUBRIC is
-    the ONLY thing in ``system`` (so the cache prefix stays byte-stable — Pitfall
-    1); the variable digest goes in ``messages``, never interpolated into the
-    prefix. Catches ``anthropic.APIError`` AND a broad ``Exception`` (defense-in-
-    depth, mirroring measure_pass CR-01), and treats ``parsed_output is None``
-    (a refusal / max_tokens truncation — Pitfall 3) identically → returns ``None``
-    so a single AI miss never crashes the run. No app-level retry (D-11): the SDK
-    already exhausted ``max_retries`` before raising.
+    Delegates to ``provider.parse_structured(system_text=RUBRIC,
+    user_text=digest_text, output_model=AnalysisResult, model=model,
+    max_tokens=AI_MAX_TOKENS)`` — the single seam (D-04) that both the Anthropic
+    and OpenAI impls narrow to. The static RUBRIC is the ONLY thing in
+    ``system_text`` (so the cache prefix stays byte-stable — Pitfall 1); the
+    variable digest is the ``user_text``. The degrade-to-None disposition — a
+    refusal / truncation / SDK error returning ``None`` so a single AI miss never
+    crashes the run — now lives inside the provider impl (D-09/D-11), so there is
+    no app-level try/except or retry here.
     """
-    try:
-        resp = client.messages.parse(
-            model=model,
-            max_tokens=AI_MAX_TOKENS,
-            temperature=0,
-            system=[{"type": "text", "text": RUBRIC, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": digest_text}],
-            output_format=AnalysisResult,
-        )
-        return resp.parsed_output
-    except anthropic.APIError:
-        return None
-    except Exception:
-        return None
+    return provider.parse_structured(
+        system_text=RUBRIC,
+        user_text=digest_text,
+        output_model=AnalysisResult,
+        model=model,
+        max_tokens=AI_MAX_TOKENS,
+    )
 
 
 def analyze_run(
     run_record: RunRecord,
     *,
-    client: anthropic.Anthropic,
+    provider: Provider,
     model: str = DEFAULT_AI_MODEL,
     scrub=None,
     err_console: Console | None = None,
@@ -322,7 +311,7 @@ def analyze_run(
     scrub/write path serializes it). The first non-error page is analyzed
     SYNCHRONOUSLY to warm the prompt cache, then the rest fan out through a
     ``ThreadPoolExecutor(max_workers=AI_POOL_SIZE)`` sharing the one thread-safe
-    ``client`` (AI-SPEC Pitfall 4).
+    ``provider`` (AI-SPEC Pitfall 4).
 
     AI-SPEC §6 ONLINE pre-write grounding guardrails (runtime, not CI-only): for
     every page that got a non-None ``AnalysisResult``, BEFORE it is final the three
@@ -354,14 +343,16 @@ def analyze_run(
     insufficient = len(error_pages)
 
     def _process(page: PageResult) -> tuple[PageResult, str, AnalysisResult | None]:
-        # WR-01: scrub the digest BEFORE it egresses to Anthropic. A credential
-        # embedded in a measured request URL (slowest_request_url / waterfall
-        # entry.url) is a network sink just like result.json / --json stdout; the
-        # scrubber must redact it before the API call. Scrubbing here also keeps
-        # the grounding pass (which compares analysis text against `digest`)
-        # consistent with what the model actually saw.
+        # WR-01 / T-05.2-04: scrub the digest BEFORE it egresses to ANY provider
+        # (Anthropic or OpenAI). A credential embedded in a measured request URL
+        # (slowest_request_url / waterfall entry.url) is a network sink just like
+        # result.json / --json stdout; the scrubber must redact it before the API
+        # call. The scrub runs here, ahead of provider.parse_structured, so the
+        # security invariant holds for every provider sink unchanged. Scrubbing
+        # here also keeps the grounding pass (which compares analysis text against
+        # `digest`) consistent with what the model actually saw.
         digest = _scrub(build_digest(page))
-        return page, digest, analyze_page(client, digest, model)
+        return page, digest, analyze_page(provider, digest, model)
 
     # Pitfall 4: warm the cache on the FIRST page synchronously, then fan out.
     processed: list[tuple[PageResult, str, AnalysisResult | None]] = []
@@ -389,7 +380,16 @@ def analyze_run(
         _emit("AI analysis post-pass failed; continuing with no analysis")
 
     analyzed = 0
-    degraded = 0
+    # WR-02: if executor.map aborted mid-stream (a non-KeyboardInterrupt raise from
+    # build_digest or a future), pages past the failure never reached `processed`.
+    # Their analysis stays None (the default), but they MUST be counted as degraded so
+    # the AI-health summary always sums to len(data_pages) — otherwise a partial
+    # post-pass failure is misreported as healthier than it was (the degraded-fraction
+    # warning keys off attempted = analyzed + degraded, which would undercount).
+    dropped = len(data_pages) - len(processed)
+    degraded = dropped
+    if dropped:
+        _emit(f"AI analysis: {dropped} page(s) dropped before processing (counted as degraded)")
     violations = {"bare_inp": 0, "fabricated_number": 0, "out_of_evidence_entity": 0}
 
     for page, digest, result in processed:

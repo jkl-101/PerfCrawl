@@ -33,7 +33,6 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import anthropic
 import httpx
 import typer
 from rich.console import Console
@@ -43,11 +42,8 @@ from perfcrawl import analysis
 from perfcrawl.auth import AuthError, make_scrubber, resolve_auth_state
 from perfcrawl.constants import (
     AI_DEGRADED_WARN_FRACTION,
-    AI_MAX_RETRIES,
-    AI_REQUEST_TIMEOUT_S,
     ANTHROPIC_API_KEY_ENV,
     CRAWLER_USER_AGENT,
-    DEFAULT_AI_MODEL,
     DEFAULT_CONCURRENCY,
     DEFAULT_CRAWL_SAMPLES_N,
     DEFAULT_MAX_DEPTH,
@@ -55,8 +51,10 @@ from perfcrawl.constants import (
     DEFAULT_MIN_DELAY_S,
     DEFAULT_SAMPLES_N,
     INP_PROXY_DISPLAY_LABEL,
+    OPENAI_API_KEY_ENV,
     PERFCRAWL_PASSWORD_ENV,
     PERFCRAWL_USERNAME_ENV,
+    PROVIDERS,
     ExitCode,
 )
 from perfcrawl.crawl import is_error_row
@@ -72,6 +70,7 @@ from perfcrawl.orchestrator import (
     measure_url,
 )
 from perfcrawl.output import write_outputs
+from perfcrawl.provider import build_provider, resolve_provider
 from perfcrawl.store import init_db, write_run
 
 
@@ -151,30 +150,36 @@ def _resolve_crawl_auth(
         _teardown_chrome(chrome, user_data_dir)
 
 
-def _run_ai_post_pass(run_record, *, ai_model: str, scrub) -> dict:
-    """Construct the shared ``Anthropic`` client and run the ``analyze_run`` post-pass.
+def _run_ai_post_pass(
+    run_record, *, ai_provider: str | None, ai_model: str | None, scrub
+) -> dict:
+    """Build the RESOLVED provider and run the ``analyze_run`` post-pass (D-01/D-02).
 
-    D-02 / D-10: invoked only when ``--ai`` is set AND the key validated at t=0, so
-    ``os.environ[ANTHROPIC_API_KEY_ENV]`` is guaranteed present here. One client is
-    shared across the bounded analyze pool (AI-SPEC Pitfall 4); the SDK owns retry
-    (``max_retries``) and per-request timeout — never a hand-rolled loop (D-11). The
-    key-seeded ``scrub`` is threaded in so every degrade/grounding stderr line and
-    the in-place-mutated ``analysis`` fields are redacted (AUTH-04 / T-05-redact).
-    ``analyze_run`` mutates ``run_record.pages`` in place, so the unchanged
-    scrub→write_outputs→write_run path serializes the populated ``analysis`` for free.
-    Returns ``analyze_run``'s per-run summary (``{"analyzed", "degraded",
-    "insufficient", "violations"}``) so the caller can surface AI health in the
-    user-facing result (AI-SPEC §7 Key Metric 3) rather than only in the stderr log.
+    D-02 / D-10: invoked only when ``--ai`` is set AND ``resolve_provider`` already
+    validated the resolved provider's key at t=0, so re-resolving here is a cheap,
+    deterministic repeat (no Chrome cost) that yields the same ``provider_name``.
+    ``build_provider`` constructs the concrete SDK client (Anthropic OR OpenAI) with
+    the single-source retry budget + timeout — one thread-safe client shared across
+    the bounded analyze pool (AI-SPEC Pitfall 4); the SDK owns retry (``max_retries``)
+    and per-request timeout — never a hand-rolled loop (D-11). When ``ai_model`` is
+    omitted (None) the RESOLVED provider's ``default_model`` governs (each provider's
+    ``PROVIDERS[name]["default_model"]`` — no model id is inlined here); an explicit
+    ``--ai-model`` wins. The key-seeded ``scrub`` is threaded in so every
+    degrade/grounding stderr line and the in-place-mutated ``analysis`` fields are
+    redacted (AUTH-04 / T-05-redact / CR-01). ``analyze_run`` mutates
+    ``run_record.pages`` in place, so the unchanged scrub→write_outputs→write_run path
+    serializes the populated ``analysis`` for free. Returns ``analyze_run``'s per-run
+    summary (``{"analyzed", "degraded", "insufficient", "violations"}``) so the caller
+    can surface AI health in the user-facing result (AI-SPEC §7 Key Metric 3) rather
+    than only in the stderr log.
     """
-    client = anthropic.Anthropic(
-        api_key=os.environ[ANTHROPIC_API_KEY_ENV],
-        max_retries=AI_MAX_RETRIES,
-        timeout=AI_REQUEST_TIMEOUT_S,
-    )
+    provider_name = resolve_provider(ai_provider, os.environ)
+    cfg = PROVIDERS[provider_name]
+    provider = build_provider(provider_name, os.environ[cfg["key_env"]])
     return analysis.analyze_run(
         run_record,
-        client=client,
-        model=ai_model,
+        provider=provider,
+        model=ai_model or cfg["default_model"],
         scrub=scrub,
         err_console=err_console,
     )
@@ -442,15 +447,27 @@ def measure(
     ai: bool = typer.Option(
         False,
         "--ai",
-        help="Run AI analysis on the measured page (D-01). Requires "
-        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
-        "in ps/history; D-10).",
+        help="Run AI analysis on the measured page (D-01). Requires an "
+        "ANTHROPIC_API_KEY or OPENAI_API_KEY in the env (or .env) — the key is "
+        "NEVER a flag (argv is visible in ps/history; D-02/D-10).",
     ),
-    ai_model: str = typer.Option(
-        DEFAULT_AI_MODEL,
+    ai_provider: str | None = typer.Option(
+        None,
+        "--ai-provider",
+        help="anthropic | openai. Optional — omit to auto-detect from whichever "
+        "key is in the env (Anthropic wins when both present, D-01). The key is "
+        "env-only, NEVER a flag (D-02).",
+    ),
+    ai_model: str | None = typer.Option(
+        None,
         "--ai-model",
-        help="Anthropic model for --ai analysis (default: the cost-appropriate "
-        "bulk model; override with e.g. claude-opus-4-8).",
+        help=(
+            "Override the model for --ai analysis WITHIN the resolved provider "
+            "(default: the provider's cost-appropriate bulk model — "
+            f"{PROVIDERS['anthropic']['default_model']} or "
+            f"{PROVIDERS['openai']['default_model']}; override with e.g. "
+            f"{PROVIDERS['anthropic']['judge_model']})."
+        ),
     ),
     output_json: bool = typer.Option(
         False,
@@ -464,25 +481,36 @@ def measure(
     ),
 ) -> None:
     """Measure ``URL`` end-to-end: Chrome → LH → outputs → SQLite → stdout."""
-    # --- D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never
-    # a flag). Fail fast at t=0 — BEFORE measure_url launches Chrome — so a missing
-    # key never costs a measurement. Read AFTER the .env load so a key in a
+    # --- D-01 / D-02 / D-10: --ai resolves a provider from the env ONLY (the key is
+    # never a flag — argv is visible in ps/history). resolve_provider implements the
+    # D-01 order (explicit --ai-provider wins → Anthropic-wins tie-break → OpenAI →
+    # fail) and the D-02 env-only fail-fast (UserError when the resolved provider's
+    # key is absent). Run it at t=0 — BEFORE measure_url launches Chrome — so a bad
+    # invocation never costs a measurement. Read AFTER the .env load so a key in a
     # gitignored .env counts (mirrors crawl()).
     if ai:
         _load_dotenv_if_present()
-        if not os.environ.get(ANTHROPIC_API_KEY_ENV):
-            err_console.print(
-                "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
-                "never a flag"
-            )
+        try:
+            resolve_provider(ai_provider, os.environ)
+        except UserError as e:
+            err_console.print(f"[red]error:[/red] {e}")
             raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
-    # AUTH-04 / RESEARCH Pitfall 5: measure() had NO scrubber. When --ai is set the
-    # ANTHROPIC_API_KEY becomes a secret that can leak into the measure output path
-    # (result.json, --json stdout, the analysis fields), so seed a key-only scrubber
-    # and thread it into write_outputs. A non-AI measure run keeps the prior
-    # behavior (scrub=None → identity in write_outputs).
-    scrub = make_scrubber(os.environ.get(ANTHROPIC_API_KEY_ENV)) if ai else None
+    # AUTH-04 / RESEARCH Pitfall 5 / CR-01: measure() had NO scrubber. When --ai is
+    # set the provider key(s) become secrets that can leak into the measure output
+    # path (result.json, --json stdout, the analysis fields), so seed the scrubber
+    # from BOTH present provider keys (the factory filters None — auth.py:80 — so an
+    # absent second key is a no-op; never write a second redactor) and thread it into
+    # write_outputs. A non-AI measure run keeps the prior behavior (scrub=None →
+    # identity in write_outputs).
+    scrub = (
+        make_scrubber(
+            os.environ.get(ANTHROPIC_API_KEY_ENV),
+            os.environ.get(OPENAI_API_KEY_ENV),
+        )
+        if ai
+        else None
+    )
 
     # --- D-15 USER_ERROR arm (input validation, before any subprocess) ---
     try:
@@ -499,7 +527,9 @@ def measure(
     # serializes page.analysis for free; the key-seeded scrub redacts every sink.
     ai_summary = None
     if ai:
-        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+        ai_summary = _run_ai_post_pass(
+            run_record, ai_provider=ai_provider, ai_model=ai_model, scrub=scrub
+        )
 
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
     try:
@@ -646,15 +676,27 @@ def crawl(
     ai: bool = typer.Option(
         False,
         "--ai",
-        help="Run per-page AI analysis after measurement (D-01). Requires "
-        "ANTHROPIC_API_KEY in the env (or .env) — NEVER a flag (argv is visible "
-        "in ps/history; D-10).",
+        help="Run per-page AI analysis after measurement (D-01). Requires an "
+        "ANTHROPIC_API_KEY or OPENAI_API_KEY in the env (or .env) — the key is "
+        "NEVER a flag (argv is visible in ps/history; D-02/D-10).",
     ),
-    ai_model: str = typer.Option(
-        DEFAULT_AI_MODEL,
+    ai_provider: str | None = typer.Option(
+        None,
+        "--ai-provider",
+        help="anthropic | openai. Optional — omit to auto-detect from whichever "
+        "key is in the env (Anthropic wins when both present, D-01). The key is "
+        "env-only, NEVER a flag (D-02).",
+    ),
+    ai_model: str | None = typer.Option(
+        None,
         "--ai-model",
-        help="Anthropic model for --ai analysis (default: the cost-appropriate "
-        "bulk model; override with e.g. claude-opus-4-8 for small high-value crawls).",
+        help=(
+            "Override the model for --ai analysis WITHIN the resolved provider "
+            "(default: the provider's cost-appropriate bulk model — "
+            f"{PROVIDERS['anthropic']['default_model']} or "
+            f"{PROVIDERS['openai']['default_model']}; override with e.g. "
+            f"{PROVIDERS['anthropic']['judge_model']} for small high-value crawls)."
+        ),
     ),
     output_dir: Path = typer.Option(
         Path("output"),
@@ -702,25 +744,32 @@ def crawl(
     username = os.environ.get(PERFCRAWL_USERNAME_ENV)
     password = os.environ.get(PERFCRAWL_PASSWORD_ENV)
 
-    # D-10 / T-05-key: --ai requires ANTHROPIC_API_KEY from the env ONLY (never a
-    # flag — argv is visible in ps/history). Fail fast at t=0 (USER_ERROR, reusing
-    # the "bad flags" band), BEFORE discovery or any measurement, so a missing key
-    # never produces a silent no-op crawl. Read AFTER the .env load above so a key
-    # in a gitignored .env counts. The error text carries no secret (the key is
-    # absent), but route nothing sensitive through it regardless.
-    if ai and not os.environ.get(ANTHROPIC_API_KEY_ENV):
-        err_console.print(
-            "[red]error:[/red] --ai requires ANTHROPIC_API_KEY (env or .env), "
-            "never a flag"
-        )
-        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+    # D-01 / D-02 / D-10: --ai resolves a provider from the env ONLY (the key is never
+    # a flag — argv is visible in ps/history). resolve_provider implements the D-01
+    # order (explicit --ai-provider wins → Anthropic-wins tie-break → OpenAI → fail)
+    # and the D-02 env-only fail-fast (UserError when the resolved provider's key is
+    # absent). Fail fast at t=0 (USER_ERROR, reusing the "bad flags" band), BEFORE
+    # discovery or any measurement, so a bad invocation never produces a silent no-op
+    # crawl. Read AFTER the .env load above so a key in a gitignored .env counts.
+    if ai:
+        try:
+            resolve_provider(ai_provider, os.environ)
+        except UserError as e:
+            err_console.print(f"[red]error:[/red] {e}")
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
-    # Seed the central credential scrubber ONCE (D-07 / AUTH-04). Applied to every
-    # sink (stderr, RunRecord JSON, result.csv, --json stdout, LH artifacts, AND
-    # the AI analysis fields) so no credential ever lands in a log or on disk. The
-    # ANTHROPIC_API_KEY is seeded as a third secret (T-05-redact) so it too is
-    # redacted at every sink; a None key (non-AI run) is a filtered no-op.
-    scrub = make_scrubber(username, password, os.environ.get(ANTHROPIC_API_KEY_ENV))
+    # Seed the central credential scrubber ONCE (D-07 / AUTH-04 / CR-01). Applied to
+    # every sink (stderr, RunRecord JSON, result.csv, --json stdout, LH artifacts, AND
+    # the AI analysis fields) so no credential ever lands in a log or on disk. BOTH
+    # provider keys are seeded (T-05-redact / CR-01) so either key is redacted at
+    # every sink; the factory filters None (auth.py:80) so a non-AI run or an absent
+    # second key is a no-op. Never write a second redactor.
+    scrub = make_scrubber(
+        username,
+        password,
+        os.environ.get(ANTHROPIC_API_KEY_ENV),
+        os.environ.get(OPENAI_API_KEY_ENV),
+    )
 
     success_rule: dict[str, str] | None = None
     if success_text:
@@ -886,7 +935,9 @@ def crawl(
     # is redacted (AUTH-04 / T-05-redact).
     ai_summary = None
     if ai:
-        ai_summary = _run_ai_post_pass(run_record, ai_model=ai_model, scrub=scrub)
+        ai_summary = _run_ai_post_pass(
+            run_record, ai_provider=ai_provider, ai_model=ai_model, scrub=scrub
+        )
 
     # D-07 / AUTH-04: redact credentials from EVERY artifact before it touches
     # disk. A Lighthouse HTML/JSON capture of an authenticated page (or the login
