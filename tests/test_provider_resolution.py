@@ -18,6 +18,7 @@ import pytest
 from perfcrawl.constants import (
     ANTHROPIC_API_KEY_ENV,
     OPENAI_API_KEY_ENV,
+    OPENROUTER_API_KEY_ENV,
 )
 from perfcrawl.orchestrator import UserError
 from perfcrawl.provider import resolve_provider
@@ -37,10 +38,43 @@ from perfcrawl.provider import resolve_provider
         (None, {OPENAI_API_KEY_ENV: "o"}, "openai"),
         # auto-detect: only Anthropic key → anthropic
         (None, {ANTHROPIC_API_KEY_ENV: "a"}, "anthropic"),
+        # D-01: explicit openrouter flag wins when its key is present (reachable only
+        # via the explicit flag — its presence in PROVIDERS makes it resolvable).
+        ("openrouter", {OPENROUTER_API_KEY_ENV: "k"}, "openrouter"),
+        # explicit openrouter wins even with the other keys also present.
+        (
+            "openrouter",
+            {
+                OPENROUTER_API_KEY_ENV: "k",
+                ANTHROPIC_API_KEY_ENV: "a",
+                OPENAI_API_KEY_ENV: "o",
+            },
+            "openrouter",
+        ),
     ],
 )
 def test_resolve_provider_selects(flag, env, expected):
     assert resolve_provider(flag, env) == expected
+
+
+def test_resolve_provider_explicit_openrouter_missing_key_raises():
+    # D-02 env-only fail-fast: an explicit openrouter flag without its key raises.
+    with pytest.raises(UserError) as exc:
+        resolve_provider("openrouter", {})
+    msg = str(exc.value)
+    assert OPENROUTER_API_KEY_ENV in msg
+    assert "never a flag" in msg
+
+
+def test_resolve_provider_openrouter_never_auto_wins():
+    # D-03 tie-break unchanged: with ONLY the OpenRouter key present and no flag,
+    # auto-detect must NOT select openrouter — it falls through to the no-key raise.
+    with pytest.raises(UserError) as exc:
+        resolve_provider(None, {OPENROUTER_API_KEY_ENV: "k"})
+    msg = str(exc.value)
+    assert ANTHROPIC_API_KEY_ENV in msg
+    assert OPENAI_API_KEY_ENV in msg
+    assert "never a flag" in msg
 
 
 def test_resolve_provider_explicit_flag_missing_key_raises():

@@ -27,6 +27,11 @@ import anthropic
 import httpx
 import pytest
 
+from perfcrawl.constants import (
+    ANTHROPIC_API_KEY_ENV,
+    OPENAI_API_KEY_ENV,
+    OPENROUTER_API_KEY_ENV,
+)
 from perfcrawl.models import (
     AnalysisResult,
     MetricSample,
@@ -37,6 +42,44 @@ from perfcrawl.models import (
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 LH_FIXTURES_DIR = FIXTURES_DIR / "lighthouse"
 DIGEST_FIXTURES_DIR = FIXTURES_DIR / "digests"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 05.3: autouse hermetic provider-env fixture (D-06/D-07/D-08)
+#
+# A default ``pytest`` run must NOT be able to reach a real provider key or
+# endpoint env var and fire a paid call. This autouse fixture clears all three
+# provider-key vars AND both endpoint vars (the OpenAI SDK auto-reads
+# ``OPENAI_BASE_URL`` from env even when not passed — Pitfall 4), and neutralizes
+# ``cli._load_dotenv_if_present`` so ``load_dotenv()`` cannot re-inject a
+# developer's ``.env`` mid-CLI-call after the delenv (Pitfall 1 — the env-clear
+# alone is insufficient). ``@pytest.mark.llm`` calibration tests opt OUT (D-07):
+# they are the ONLY tests allowed to read the real environment.
+# --------------------------------------------------------------------------- #
+
+# Endpoint env vars the OpenAI SDK / config may auto-read (Pitfall 4).
+# ANTHROPIC_BASE_URL is included for completeness/defense-in-depth so the
+# hermetic guarantee covers every provider's endpoint var, not just the
+# OpenAI-compatible ones.
+_ENDPOINT_ENV_VARS = ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL")
+_KEY_ENV_VARS = (ANTHROPIC_API_KEY_ENV, OPENAI_API_KEY_ENV, OPENROUTER_API_KEY_ENV)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_provider_env(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-06/D-07/D-08: no real key/endpoint reaches resolve_provider/build_provider
+    in a default ``pytest`` run. ``llm``-marked calibration tests opt OUT (D-07)."""
+    if request.node.get_closest_marker("llm"):
+        return  # D-07: the ONLY env-readers
+    for var in (*_KEY_ENV_VARS, *_ENDPOINT_ENV_VARS):
+        monkeypatch.delenv(var, raising=False)
+    # D-08 Pitfall 1: load_dotenv() runs DURING the CLI call and would re-inject a
+    # developer's .env after the delenv above — neutralize it for non-llm tests
+    # (load_dotenv is imported lazily INSIDE the function, so this is the chokepoint).
+    monkeypatch.setattr("perfcrawl.cli._load_dotenv_if_present", lambda: None)
 
 
 # --------------------------------------------------------------------------- #

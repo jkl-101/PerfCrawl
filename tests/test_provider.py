@@ -20,6 +20,7 @@ client (the providers only call ``client.messages.parse`` /
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -29,9 +30,13 @@ import openai
 import pytest
 from pydantic import ValidationError
 
-from perfcrawl.constants import OPENAI_AI_MAX_TOKENS, OPENAI_REASONING_EFFORT
+from perfcrawl.constants import (
+    OPENAI_AI_MAX_TOKENS,
+    OPENAI_REASONING_EFFORT,
+    OPENROUTER_BASE_URL,
+)
 from perfcrawl.models import AnalysisResult
-from perfcrawl.provider import AnthropicProvider, OpenAIProvider
+from perfcrawl.provider import AnthropicProvider, OpenAIProvider, build_provider
 
 # ``judge`` imports as a top-level module from ``tests/eval`` (no __init__.py →
 # pytest's prepend import mode puts it on sys.path when eval tests collect). Add
@@ -385,6 +390,108 @@ def test_openai_provider_honors_construction_max_completion_tokens():
         model="gpt-5.5", max_tokens=800,
     )
     assert client.calls[0]["max_completion_tokens"] == 3000
+
+
+# --------------------------------------------------------------------------- #
+# D-04: send_reasoning_effort gate — portable shape vs native gpt-5 shape.
+# Get the call shape wrong and every page through OpenRouter degrades to None on
+# a `reasoning_effort` 400; get it right and the native gpt-5 path is unchanged.
+# --------------------------------------------------------------------------- #
+def test_openai_provider_send_reasoning_effort_false_uses_temperature():
+    # Portable shape: OpenRouter's cheap (non-reasoning) models 400 on
+    # reasoning_effort, so it MUST be omitted and temperature=0 sent instead.
+    client = FakeOpenAI(parsed=_GOOD_ANALYSIS, refusal=None)
+    provider = OpenAIProvider(client, send_reasoning_effort=False)
+    provider.parse_structured(
+        system_text="S", user_text="U", output_model=AnalysisResult,
+        model="openai/gpt-4o-mini", max_tokens=600,
+    )
+    kwargs = client.calls[0]
+    assert kwargs["temperature"] == 0
+    assert "reasoning_effort" not in kwargs
+
+
+def test_openai_provider_send_reasoning_effort_true_uses_reasoning_effort():
+    # Native gpt-5 shape (byte-for-byte 05.2): reasoning_effort sent, NO temperature.
+    client = FakeOpenAI(parsed=_GOOD_ANALYSIS, refusal=None)
+    provider = OpenAIProvider(client, send_reasoning_effort=True)
+    provider.parse_structured(
+        system_text="S", user_text="U", output_model=AnalysisResult,
+        model="gpt-5-mini", max_tokens=600,
+    )
+    kwargs = client.calls[0]
+    assert kwargs["reasoning_effort"] == OPENAI_REASONING_EFFORT
+    assert "temperature" not in kwargs
+
+
+def test_openai_provider_send_reasoning_effort_defaults_true():
+    # Default preserves the native path for any existing caller that omits the flag.
+    client = FakeOpenAI(parsed=_GOOD_ANALYSIS, refusal=None)
+    provider = OpenAIProvider(client)
+    provider.parse_structured(
+        system_text="S", user_text="U", output_model=AnalysisResult,
+        model="gpt-5-mini", max_tokens=600,
+    )
+    kwargs = client.calls[0]
+    assert kwargs["reasoning_effort"] == OPENAI_REASONING_EFFORT
+    assert "temperature" not in kwargs
+
+
+# --------------------------------------------------------------------------- #
+# build_provider: base_url threading + the send_reasoning_effort gate (D-04/D-01).
+# --------------------------------------------------------------------------- #
+def test_build_provider_openrouter_threads_base_url_and_portable_shape():
+    provider = build_provider("openrouter", "k")
+    assert isinstance(provider, OpenAIProvider)
+    # The OpenRouter base_url from the registry reached the SDK client.
+    assert str(provider._client.base_url).rstrip("/") == OPENROUTER_BASE_URL
+    # OpenRouter takes the portable shape (its cheap models reject reasoning_effort).
+    assert provider._send_reasoning_effort is False
+
+
+def test_build_provider_openai_native_reasoning_effort():
+    # No base_url override on the openai provider → native gpt-5 path (True).
+    provider = build_provider("openai", "k")
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._send_reasoning_effort is True
+
+
+def test_build_provider_openai_custom_base_url_forces_portable():
+    # The `and (effective_base_url is None)` clause: ANY custom base_url forces the
+    # portable shape, even on the openai row whose registry flag is True.
+    provider = build_provider("openai", "k", base_url="https://gw.example/v1")
+    assert str(provider._client.base_url).rstrip("/") == "https://gw.example/v1"
+    assert provider._send_reasoning_effort is False
+
+
+def test_build_provider_openrouter_base_url_override_wins():
+    # An explicit base_url overrides the registry default; still portable.
+    provider = build_provider("openrouter", "k", base_url="https://other/v1")
+    assert str(provider._client.base_url).rstrip("/") == "https://other/v1"
+    assert provider._send_reasoning_effort is False
+
+
+# --------------------------------------------------------------------------- #
+# Single-source meta-test (CLAUDE.md hard rule + Phase-1 grep discipline).
+# Mirrors tests/test_cli.py::test_cli_source_has_no_bare_inp — provider.py must
+# reach the OpenRouter base_url host + default model slug ONLY via the constants
+# import, never as an inline literal.
+# --------------------------------------------------------------------------- #
+def test_provider_source_has_no_inline_base_url_or_slug():
+    import perfcrawl.provider as provider_module
+
+    src = inspect.getsource(provider_module)
+    # Strip pure-comment lines so a header comment mentioning the host/slug cannot
+    # self-invalidate the gate — only the executable source body must be clean.
+    code = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "openrouter.ai" not in code, (
+        "provider.py must reach the OpenRouter host only via OPENROUTER_BASE_URL"
+    )
+    assert "gpt-4o-mini" not in code, (
+        "provider.py must reach the OpenRouter slug only via the constant"
+    )
 
 
 # --------------------------------------------------------------------------- #
