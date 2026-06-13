@@ -276,10 +276,44 @@ OPENAI_JUDGE_MAX_TOKENS: int = 3000
 # drops `"low"`; single-source, every call site imports this by name.
 OPENAI_REASONING_EFFORT: str = "low"
 
+
+# --- Phase 05.3 OpenRouter / OpenAI-compatible endpoint constants -----------
+# Portability-hardening (D-01/D-05/D-09): OpenRouter is OpenAI-wire-compatible, so
+# it reuses the OpenAIProvider class with nothing but a distinct key + base_url.
+# EVERY OpenRouter literal (key-env NAME, base_url, vendor/model slug) lives HERE —
+# provider.py, cli.py and the tests import these by name, NEVER inline
+# "openrouter.ai" or "openai/gpt-4o-mini" (Phase-1 single-source grep meta-test).
+# The base_url + slug were verified live 2026-06-13; the slug is volatile (OpenRouter
+# uses vendor/model slugs and gpt-5-mini is invalid there) — a re-pin is a one-line
+# edit here, same posture as the gpt-5 ids above (RESEARCH A1).
+
+# D-01/D-02: the env var the OpenRouter key is read from. Distinct from OPENAI's so
+# an `sk-or-v1-…` key never gets sent to api.openai.com; intake is env-only (never a
+# Typer Option — argv is visible in `ps`/shell history).
+OPENROUTER_API_KEY_ENV: str = "OPENROUTER_API_KEY"
+
+# D-01: the baked-in OpenRouter endpoint. Verified live 2026-06-13.
+OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
+# D-05: the OpenRouter default generator — a cheap, structured-output-capable,
+# NON-reasoning vendor/model slug ($0.15/$0.60 per M, verified live 2026-06-13).
+# `--ai-model` overrides. Re-verify at plan time, slugs rotate.
+OPENROUTER_DEFAULT_AI_MODEL: str = "openai/gpt-4o-mini"
+
+# D-09: registry-shape consistency only — OpenRouter judge calibration is deferred
+# and is NOT on the 05.3 closing path. Don't over-invest in this slug.
+OPENROUTER_JUDGE_MODEL: str = "openai/gpt-4o-mini"
+
 # D-03: the single-source provider registry every consumer imports. Maps a provider
 # NAME to its default generator model, independent judge model, and key-env NAME.
 # Anthropic entries reference the existing Phase-5 constants by name (never re-spell
-# the literals); OpenAI entries reference the block above.
+# the literals); OpenAI/OpenRouter entries reference the blocks above.
+#
+# D-04 capability flag: `send_reasoning_effort` declares whether a provider's native
+# endpoint accepts the gpt-5-family `reasoning_effort` kwarg. Only `openai` (the
+# native gpt-5 path) carries `True`; `openrouter` (and any custom base_url) take the
+# portable chat shape (`False`). `anthropic` has NO such key — `build_provider`
+# reads it with `.get("send_reasoning_effort", False)`, so the absent key is safe.
 PROVIDERS = {
     "anthropic": {
         "default_model": DEFAULT_AI_MODEL,
@@ -290,6 +324,14 @@ PROVIDERS = {
         "default_model": OPENAI_DEFAULT_AI_MODEL,
         "judge_model": OPENAI_JUDGE_MODEL,
         "key_env": OPENAI_API_KEY_ENV,
+        "send_reasoning_effort": True,
+    },
+    "openrouter": {
+        "default_model": OPENROUTER_DEFAULT_AI_MODEL,
+        "judge_model": OPENROUTER_JUDGE_MODEL,
+        "key_env": OPENROUTER_API_KEY_ENV,
+        "base_url": OPENROUTER_BASE_URL,
+        "send_reasoning_effort": False,
     },
 }
 
