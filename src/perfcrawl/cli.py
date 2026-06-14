@@ -1112,7 +1112,7 @@ def login(
     """
     from playwright.sync_api import sync_playwright
 
-    from perfcrawl.auth import validate_storage_state
+    from perfcrawl.auth import capture_storage_state, validate_storage_state
 
     # WR-03 / AUTH-04: unlike `crawl`, `login` has no --user/--pass to seed a
     # scrubber from — its one secret-bearing input is a URL that may carry
@@ -1156,7 +1156,7 @@ def login(
             except (EOFError, KeyboardInterrupt):
                 # No TTY / Ctrl-C: capture whatever session exists rather than crash.
                 err_console.print("[yellow]no Enter received — capturing current session[/yellow]")
-            state = ctx.storage_state()
+            state = capture_storage_state(ctx, page)
             browser.close()  # disconnect only — the Popen'd Chrome stays alive
     except Exception as e:  # noqa: BLE001 — surface a clean message, never a traceback
         # WR-03: scrub the exception text — a Playwright error can echo back the

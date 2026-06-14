@@ -22,6 +22,7 @@ import pytest
 from perfcrawl.auth import (
     AuthError,
     _login_confirmed,
+    capture_storage_state,
     do_form_login,
     make_scrubber,
     validate_storage_state,
@@ -351,3 +352,139 @@ def test_gitignore_covers_secrets():
     text = gitignore.read_text()
     assert ".env" in text, ".gitignore must ignore .env (credential env file)"
     assert "authstate" in text, ".gitignore must cover the saved storage_state pattern"
+
+
+# ---------------------------------------------------------------------------
+# capture_storage_state — robust capture over the Chrome-148 CDP cookie bug
+# (DEBUG login-storage-state-capture)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCDPSession:
+    def __init__(self, cookies):
+        self._cookies = cookies
+        self.detached = False
+
+    def send(self, method):
+        assert method == "Network.getAllCookies"
+        return {"cookies": self._cookies}
+
+    def detach(self):
+        self.detached = True
+
+
+class _CaptureCtx:
+    """A DEFAULT-context stub for capture_storage_state.
+
+    ``storage_state()`` raises ``raise_exc`` (or returns ``ok_state`` when None).
+    ``new_cdp_session`` hands back a page-scoped CDP session yielding ``cdp_cookies``.
+    """
+
+    def __init__(self, *, raise_exc=None, ok_state=None, cdp_cookies=None):
+        self._raise = raise_exc
+        self._ok = ok_state
+        self._cdp_cookies = cdp_cookies or []
+        self.cdp_session = None
+        self.storage_state_calls = 0
+
+    def storage_state(self):
+        self.storage_state_calls += 1
+        if self._raise is not None:
+            raise self._raise
+        return self._ok
+
+    def new_cdp_session(self, _page):
+        self.cdp_session = _FakeCDPSession(self._cdp_cookies)
+        return self.cdp_session
+
+
+class _CapturePage:
+    def __init__(self, ls=None, origin="https://site"):
+        self._ls = ls or {}
+        self._origin = origin
+
+    def evaluate(self, script):
+        if "location.origin" in script:
+            return self._origin
+        return dict(self._ls)
+
+
+def test_capture_storage_state_fast_path_returns_unchanged():
+    """When ctx.storage_state() works, its result is returned verbatim and the
+    page-scoped CDP fallback is NEVER touched (working headless path preserved)."""
+    ok = {"cookies": [{"name": "sid", "value": "x"}], "origins": []}
+    ctx = _CaptureCtx(ok_state=ok)
+    out = capture_storage_state(ctx, _CapturePage())
+    assert out is ok
+    assert ctx.cdp_session is None  # fallback not entered
+
+
+def test_capture_storage_state_falls_back_on_browser_context_error():
+    """The exact Chrome-148 error triggers the page-scoped CDP cookie capture,
+    producing a valid Playwright-shaped storage_state."""
+    err = Exception(
+        "BrowserContext.storage_state: Protocol error (Storage.getCookies): "
+        "Browser context management is not supported."
+    )
+    cdp_cookies = [
+        {
+            "name": "sessionid",
+            "value": "abc123",
+            "domain": ".studyhalo.com",
+            "path": "/",
+            "expires": 1893456000.0,
+            "httpOnly": True,
+            "secure": True,
+            "sameSite": "Lax",
+        },
+        # A session cookie (expires -1) with an unmapped sameSite to exercise
+        # the normalizations.
+        {
+            "name": "csrftoken",
+            "value": "xyz",
+            "domain": "www.studyhalo.com",
+            "path": "/",
+            "expires": -1,
+            "httpOnly": False,
+            "secure": True,
+        },
+    ]
+    ctx = _CaptureCtx(raise_exc=err, cdp_cookies=cdp_cookies)
+    page = _CapturePage(ls={"token": "t1"}, origin="https://www.studyhalo.com")
+
+    state = capture_storage_state(ctx, page)
+
+    # Fallback fired exactly once and detached its CDP session.
+    assert ctx.storage_state_calls == 1
+    assert ctx.cdp_session is not None and ctx.cdp_session.detached is True
+
+    # Cookies mapped into Playwright shape.
+    names = {c["name"] for c in state["cookies"]}
+    assert names == {"sessionid", "csrftoken"}
+    sess = next(c for c in state["cookies"] if c["name"] == "sessionid")
+    assert sess["value"] == "abc123" and sess["secure"] is True
+    assert sess["sameSite"] == "Lax"
+    csrf = next(c for c in state["cookies"] if c["name"] == "csrftoken")
+    assert csrf["expires"] == -1  # session-cookie sentinel preserved
+    assert csrf["sameSite"] == "Lax"  # missing sameSite defaulted, not crashed
+
+    # localStorage gathered as a state origin.
+    assert state["origins"] == [
+        {
+            "origin": "https://www.studyhalo.com",
+            "localStorage": [{"name": "token", "value": "t1"}],
+        }
+    ]
+
+    # The product of the fallback validates as a real session (Pitfall 4).
+    assert validate_storage_state(state) is state
+
+
+def test_capture_storage_state_reraises_unrelated_error():
+    """A storage_state() failure that is NOT the browser-context-management bug
+    must propagate unchanged — the fallback is narrow, not a blanket swallow."""
+    boom = RuntimeError("Target page, context or browser has been closed")
+    ctx = _CaptureCtx(raise_exc=boom)
+    with pytest.raises(RuntimeError, match="has been closed"):
+        capture_storage_state(ctx, _CapturePage())
+    assert ctx.cdp_session is None  # never reached the CDP fallback
