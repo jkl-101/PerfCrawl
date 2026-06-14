@@ -44,6 +44,7 @@ __all__ = [
     "AuthError",
     "make_scrubber",
     "do_form_login",
+    "capture_storage_state",
     "validate_storage_state",
     "resolve_auth_state",
 ]
@@ -134,6 +135,117 @@ def _login_confirmed(page: Any, login_url: str, success_rule: dict[str, str] | N
     return urlsplit(landed).path != urlsplit(login_url).path
 
 
+# Markers identifying the Chrome-148-over-CDP cookie-capture failure mode.
+# ``ctx.storage_state()`` issues a BROWSER-target ``Storage.getCookies`` (with the
+# default context's id) which, in the real interactive authenticated state on
+# Chrome 148 reached over ``connect_over_cdp``, returns
+# ``Protocol error (Storage.getCookies): Browser context management is not
+# supported``. (DEBUG login-storage-state-capture — first surfaced 2026-06-14 on
+# the interactive ``perfcrawl login`` path against a real external Django login.)
+_CDP_COOKIE_CAPTURE_FAILURE_MARKERS = (
+    "browser context management is not supported",
+    "storage.getcookies",
+)
+
+
+def _is_cdp_cookie_capture_failure(exc: Exception) -> bool:
+    """True iff ``exc`` is the Chrome-148 browser-context-management cookie failure.
+
+    Matched narrowly on the distinctive Chrome error text so the page-scoped
+    fallback is taken ONLY for this specific failure; every other Playwright
+    error from ``storage_state()`` re-raises unchanged.
+    """
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CDP_COOKIE_CAPTURE_FAILURE_MARKERS)
+
+
+def _cdp_cookie_to_state(cookie: dict) -> dict:
+    """Map a CDP ``Network.Cookie`` onto a Playwright ``storage_state`` cookie.
+
+    The two shapes are near-identical; the only normalizations are the
+    session-cookie expiry sentinel (Playwright uses ``-1``) and ``sameSite``
+    (Playwright accepts only ``Strict`` / ``Lax`` / ``None``).
+    """
+    expires = cookie.get("expires", -1)
+    if not isinstance(expires, (int, float)) or expires <= 0:
+        expires = -1
+    same_site = cookie.get("sameSite")
+    if same_site not in ("Strict", "Lax", "None"):
+        # CDP may omit sameSite (or report an unmapped value); Playwright's
+        # add_cookies requires one of the three. "Lax" is Chrome's own default.
+        same_site = "Lax"
+    return {
+        "name": cookie.get("name", ""),
+        "value": cookie.get("value", ""),
+        "domain": cookie.get("domain", ""),
+        "path": cookie.get("path", "/"),
+        "expires": float(expires),
+        "httpOnly": bool(cookie.get("httpOnly", False)),
+        "secure": bool(cookie.get("secure", False)),
+        "sameSite": same_site,
+    }
+
+
+def _gather_origin_local_storage(page: Any) -> list[dict]:
+    """Best-effort capture of the current page's localStorage as a state origin.
+
+    Cookies are the session currency for a Django session login (the ``sessionid``
+    cookie IS the session), so a failure here degrades gracefully to ``[]`` rather
+    than losing the whole capture. Token-in-localStorage sessions still benefit.
+    """
+    try:
+        items = page.evaluate(
+            "() => { const o = {}; for (let i = 0; i < localStorage.length; i++)"
+            " { const k = localStorage.key(i); o[k] = localStorage.getItem(k); }"
+            " return o; }"
+        )
+        if not items:
+            return []
+        origin = page.evaluate("() => location.origin")
+        return [
+            {
+                "origin": origin,
+                "localStorage": [{"name": k, "value": v} for k, v in items.items()],
+            }
+        ]
+    except Exception:
+        return []
+
+
+def capture_storage_state(ctx: Any, page: Any) -> dict:
+    """Capture the DEFAULT context's ``storage_state``, robust to the Chrome-148 bug.
+
+    Fast path: ``ctx.storage_state()`` — UNCHANGED behavior whenever it succeeds,
+    so the headless scripted-login path that already relies on it keeps working
+    byte-for-byte.
+
+    Fallback: only when Playwright's browser-target ``Storage.getCookies`` raises
+    the ``Browser context management is not supported`` error (observed solely in
+    the real interactive authenticated state on Chrome 148 over ``connect_over_cdp``
+    — DEBUG login-storage-state-capture), rebuild an equivalent state from a
+    PAGE-scoped CDP ``Network.getAllCookies`` plus the page's own localStorage. A
+    page-target CDP session exposes the ``Network`` domain (a browser-target one
+    does NOT — that was the dead-end noted in the debug evidence), so this path
+    is available over the same CDP seam without touching browser-context APIs.
+    """
+    try:
+        return ctx.storage_state()
+    except Exception as exc:
+        if not _is_cdp_cookie_capture_failure(exc):
+            raise
+    # Targeted Chrome-148 failure only — page-scoped CDP cookie capture.
+    cdp = ctx.new_cdp_session(page)
+    try:
+        raw = cdp.send("Network.getAllCookies")
+    finally:
+        try:
+            cdp.detach()
+        except Exception:
+            pass
+    cookies = [_cdp_cookie_to_state(c) for c in raw.get("cookies", [])]
+    return {"cookies": cookies, "origins": _gather_origin_local_storage(page)}
+
+
 def do_form_login(
     *,
     port: int,
@@ -219,7 +331,7 @@ def do_form_login(
         # is now inside the guard too (WR-02): a storage_state() failure becomes
         # a credential-free AuthError rather than a raw chained Playwright error.
         try:
-            state = ctx.storage_state()
+            state = capture_storage_state(ctx, page)
         except Exception:
             raise AuthError(
                 "could not capture the authenticated session after login"
