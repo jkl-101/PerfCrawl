@@ -10,9 +10,10 @@ AI explain what it finds, and writes results to the output formats you choose.
 
 ## Current capabilities (v0.1.0)
 
-PerfCrawl can audit **a single URL**, **crawl a whole site end-to-end**, and
-**crawl behind a login** today. AI analysis and Google Sheets output are
-scheduled for later milestones (see [Roadmap](#roadmap)).
+PerfCrawl can audit **a single URL**, **crawl a whole site end-to-end**,
+**crawl behind a login**, and **run provider-agnostic AI analysis** on what it
+measures today. Google Sheets output is the remaining Phase-6 increment (see
+[Roadmap](#roadmap)).
 
 What works **right now**:
 
@@ -31,6 +32,11 @@ What works **right now**:
 - **`perfcrawl measure <url>`** — runs a real Lighthouse 13.3.0 audit against a
   Playwright-launched Chrome attached over CDP, takes N samples, and reports the
   median.
+- **`--ai` per-page AI analysis** — runs an Observation / Potential cause /
+  Suggested optimization triple on every measured page, provider-agnostic across
+  Anthropic / OpenAI / OpenRouter (or any OpenAI-compatible endpoint). AI numeric
+  claims are checked against the measured metrics before they're written. Works on
+  both `measure` and `crawl`. See [AI analysis](#ai-analysis).
 - **Frontend metrics captured per page:** Lighthouse Performance / A11y / SEO /
   Best-Practices scores, lab CWV (LCP, CLS, **TBT as the labeled INP proxy** —
   see note), TTFB, request count, total bytes, slowest request URL + time, and
@@ -327,6 +333,82 @@ In addition to the `measure`/`crawl` contract, authenticated crawls add `3` —
 aborted the crawl. As everywhere, the message on stderr is scrubbed and carries
 no raw traceback.
 
+## AI analysis
+
+`--ai` runs per-page AI analysis **after** measurement — an Observation /
+Potential cause / Suggested optimization triple for every measured page. It
+exists on **both** `measure` and `crawl`. It requires a provider API key in the
+environment (or a gitignored `.env`); the key is **never** a flag (argv is
+visible in `ps` and shell history — the same posture as the auth credentials).
+
+`--ai-provider anthropic | openai | openrouter` is optional. Omit it to
+auto-detect from whichever key is in the env: **Anthropic wins** when both an
+Anthropic and an OpenAI key are present. `openrouter` is **opt-in via the flag
+only** — it is never auto-detected.
+
+> **API keys are not flags** — they come from `ANTHROPIC_API_KEY`,
+> `OPENAI_API_KEY`, or `OPENROUTER_API_KEY` in the environment (or a gitignored
+> `.env`), never argv. Like the auth credentials, the key is scrubbed from
+> **every** sink — stderr, `result.json`, `result.csv`, and the raw Lighthouse
+> artifacts — so it never lands in a log, an output file, or a committed file.
+
+`--ai-model` overrides the model **within** the resolved provider. The default is
+the provider's cost-appropriate bulk model:
+
+| Provider     | Default model        |
+| ------------ | -------------------- |
+| `anthropic`  | `claude-sonnet-4-6`  |
+| `openai`     | `gpt-5-mini`         |
+| `openrouter` | `openai/gpt-4o-mini` |
+
+Override per-run, e.g. `--ai-model claude-opus-4-8` for a small high-value crawl.
+
+`--ai-base-url` points the OpenAI-compatible path at a custom endpoint (LM Studio
+/ Together / Groq / self-hosted). It's non-secret, so a flag is fine. The
+`openrouter` provider bakes its own default base_url, so you don't pass one for it.
+
+> **Fail-fast guardrails.** A bare `--ai-base-url` on the generic `openai`
+> provider **without** an explicit `--ai-model` errors at `t=0` — the OpenAI
+> default slug would `400` on a custom gateway, so you must name the model the
+> gateway serves. The named `openrouter` provider is exempt (it ships a valid
+> default slug + base_url). `--ai-base-url` on the `anthropic` provider is
+> **rejected outright** (it would send traffic to a non-Anthropic endpoint).
+
+Each analyzed page gains an `analysis` block (`observation`, `potential_cause`,
+`suggested_optimization`) in `result.json` / `result.csv`. The terminal prints an
+AI health line:
+
+```
+AI: N analyzed · N degraded · N insufficient · N grounding flags
+```
+
+> **Grounding guardrail.** AI numeric claims are checked against the measured
+> metrics before they're written. A fabricated number that doesn't trace to a
+> real metric is flagged to stderr and counted as a **grounding flag** — but the
+> analysis is **retained**, not dropped. Treat a non-zero flag count as a signal
+> to scrutinize that page's analysis, not as a run failure.
+
+An OpenAI `measure` run:
+
+```bash
+uv run perfcrawl measure https://example.com/ --ai --ai-provider openai
+```
+
+An authenticated OpenRouter `crawl` run:
+
+```bash
+uv run perfcrawl crawl https://app.example.com/ --auth-state app.authstate.json --ai --ai-provider openrouter
+```
+
+### AI flags
+
+| Flag            | Default       | Notes                                                                                                       |
+| --------------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `--ai`          | off           | Run per-page AI analysis after measurement (Observation / cause / optimization). Needs a provider key in env. |
+| `--ai-provider` | (auto-detect) | `anthropic` \| `openai` \| `openrouter`. Auto-detects from the env key (Anthropic wins the tie); `openrouter` is opt-in only. |
+| `--ai-model`    | provider bulk model | Override the model within the resolved provider — `claude-sonnet-4-6` / `gpt-5-mini` / `openai/gpt-4o-mini` by default. |
+| `--ai-base-url` | (provider default) | Custom OpenAI-compatible endpoint base_url. Needs `--ai-model` on `openai`; baked-in for `openrouter`; rejected on `anthropic`. |
+
 ## Roadmap
 
 PerfCrawl is being built in vertical slices — each phase is a real,
@@ -337,9 +419,12 @@ shippable increment.
 | 1     | ✓      | Data model + SQLite store + RunDelta engine + canonical URL key            |
 | 2     | ✓      | `perfcrawl measure <url>` — single-URL end-to-end                          |
 | 3     | ✓      | `perfcrawl crawl <url>` — link + sitemap discovery, robots.txt, politeness |
-| 4     | ✓      | Authenticated crawls — login once, reuse session, denylist destructive links (you are here) |
-| 5     |        | AI analysis — per-page Observation / Cause / Suggested Optimization        |
-| 6     |        | Google Sheets output, run-over-run regression flagging, all output formats |
+| 4     | ✓      | Authenticated crawls — login once, reuse session, denylist destructive links |
+| 5     | ✓      | AI analysis — per-page Observation / Cause / Suggested Optimization        |
+| 05.1  | ✓      | AI evaluation completion — judge-graded eval harness over the analysis layer |
+| 05.2  | ✓      | Provider-agnostic AI adapter — OpenAI as a first-class `--ai` provider      |
+| 05.3  | ✓      | OpenAI-compatible endpoints — OpenRouter + custom `--ai-base-url`           |
+| 6     |        | Google Sheets output, run-over-run regression flagging, all output formats (you are here) |
 
 Phase 2 also delivered median-of-N early so Phase 6's regression flagging
 stands on stable data from day one. Backend internals for owned Django sites
