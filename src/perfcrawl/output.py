@@ -191,12 +191,18 @@ def _unique_slug_path(directory: Path, base_slug: str, suffix: str) -> Path:
         n += 1
 
 
+# OUT-01: the on-disk format tokens write_outputs owns. ``sheets`` is NOT here —
+# the CLI routes it to ``sheets.write_sheets`` (a network sink, not a file tree).
+_DEFAULT_FORMATS: frozenset[str] = frozenset({"json", "csv", "artifacts"})
+
+
 def write_outputs(
     run_record: RunRecord,
     *,
     output_dir: Path,
     raw_artifacts: dict[str, tuple[str, str]] | None = None,
     scrub: Callable[[str], str] | None = None,
+    formats: set[str] | None = None,
 ) -> Path:
     """Write the per-run artifact tree under ``<output_dir>/<run_id>/``.
 
@@ -231,16 +237,19 @@ def write_outputs(
     """
     if scrub is None:
         scrub = _identity_scrub
+    if formats is None:
+        formats = set(_DEFAULT_FORMATS)
     run_dir = Path(output_dir) / str(run_record.id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- result.json: full-fidelity, atomic, scrubbed ---
-    _atomic_write_text(
-        run_dir / "result.json",
-        scrub(run_record.model_dump_json(indent=2)),
-    )
+    # --- result.json: full-fidelity, atomic, scrubbed (OUT-01: gated on "json") ---
+    if "json" in formats:
+        _atomic_write_text(
+            run_dir / "result.json",
+            scrub(run_record.model_dump_json(indent=2)),
+        )
 
-    # --- result.csv: locked column order, atomic ---
+    # --- result.csv: locked column order, atomic (OUT-01: gated on "csv") ---
     # Build the CSV content in-memory then write it atomically. csv.DictWriter
     # against a StringIO keeps the locked column order intact without a
     # mid-write window where result.csv would be half-populated.
@@ -255,21 +264,22 @@ def write_outputs(
     # imports are cached and free on subsequent calls; inline imports
     # complicate static analysis (mypy, ruff's I001) and grep discovery for
     # no real benefit.
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="raise")
-    writer.writeheader()
-    for page in run_record.pages:
-        writer.writerow(_build_csv_row(run_record, page))
-    csv_content = buf.getvalue().replace("\r\n", "\n")
-    # CR-01 / AUTH-04: scrub the CSV at the SAME boundary as result.json. The
-    # CSV emits ``page.url`` and ``page.slowest_request_url`` straight from the
-    # as-measured PageResult; either can carry an embedded credential. Scrubbing
-    # the rendered CSV text before the atomic write keeps the first and only
-    # on-disk copy redacted.
-    _atomic_write_text(run_dir / "result.csv", scrub(csv_content))
+    if "csv" in formats:
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="raise")
+        writer.writeheader()
+        for page in run_record.pages:
+            writer.writerow(_build_csv_row(run_record, page))
+        csv_content = buf.getvalue().replace("\r\n", "\n")
+        # CR-01 / AUTH-04: scrub the CSV at the SAME boundary as result.json. The
+        # CSV emits ``page.url`` and ``page.slowest_request_url`` straight from the
+        # as-measured PageResult; either can carry an embedded credential. Scrubbing
+        # the rendered CSV text before the atomic write keeps the first and only
+        # on-disk copy redacted.
+        _atomic_write_text(run_dir / "result.csv", scrub(csv_content))
 
-    # --- lighthouse/<slug>.{json,html} ---
-    if raw_artifacts:
+    # --- lighthouse/<slug>.{json,html} (OUT-01: gated on "artifacts") ---
+    if "artifacts" in formats and raw_artifacts:
         lh_dir = run_dir / "lighthouse"
         lh_dir.mkdir(parents=True, exist_ok=True)
         for page in run_record.pages:
