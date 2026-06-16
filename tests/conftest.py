@@ -31,6 +31,7 @@ from perfcrawl.constants import (
     ANTHROPIC_API_KEY_ENV,
     OPENAI_API_KEY_ENV,
     OPENROUTER_API_KEY_ENV,
+    PERFCRAWL_SHEETS_SA_ENV,
 )
 from perfcrawl.models import (
     AnalysisResult,
@@ -63,6 +64,11 @@ DIGEST_FIXTURES_DIR = FIXTURES_DIR / "digests"
 # OpenAI-compatible ones.
 _ENDPOINT_ENV_VARS = ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "OPENROUTER_BASE_URL")
 _KEY_ENV_VARS = (ANTHROPIC_API_KEY_ENV, OPENAI_API_KEY_ENV, OPENROUTER_API_KEY_ENV)
+# Phase 06: the Google Sheets service-account-JSON PATH env var. A default
+# pytest run (Plan-03 CLI default-path tests included) must NEVER be able to
+# reach a live Google Sheet via a developer's real env, so this is cleared in
+# the same autouse hermetic sweep as the provider keys (non-``llm`` tests only).
+_SHEETS_ENV_VARS = (PERFCRAWL_SHEETS_SA_ENV,)
 
 
 @pytest.fixture(autouse=True)
@@ -71,10 +77,14 @@ def _hermetic_provider_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """D-06/D-07/D-08: no real key/endpoint reaches resolve_provider/build_provider
-    in a default ``pytest`` run. ``llm``-marked calibration tests opt OUT (D-07)."""
+    in a default ``pytest`` run. ``llm``-marked calibration tests opt OUT (D-07).
+
+    Phase 06: also drops ``PERFCRAWL_SHEETS_SA`` so a default run can never reach a
+    live Google Sheet through a developer's real service-account env (consumed by
+    the Plan-03 CLI default-path tests)."""
     if request.node.get_closest_marker("llm"):
         return  # D-07: the ONLY env-readers
-    for var in (*_KEY_ENV_VARS, *_ENDPOINT_ENV_VARS):
+    for var in (*_KEY_ENV_VARS, *_ENDPOINT_ENV_VARS, *_SHEETS_ENV_VARS):
         monkeypatch.delenv(var, raising=False)
     # D-08 Pitfall 1: load_dotenv() runs DURING the CLI call and would re-inject a
     # developer's .env after the delenv above — neutralize it for non-llm tests
@@ -536,6 +546,75 @@ def delta_pair() -> tuple[RunRecord, RunRecord]:
                 url_key="https://studyhalo.com/new",
                 perf_score=0.95,  # only in current -> direction=new
             ),
+        ],
+    )
+    return previous, current
+
+
+@pytest.fixture
+def band_pair() -> tuple[RunRecord, RunRecord]:
+    """A (previous, current) two-run pair exercising every D-01/D-02 band edge case.
+
+    Mirrors ``delta_pair``'s shape (one ``url_key`` per scenario so each
+    ``compute_deltas(current, previous)`` RunDelta is independently addressable),
+    but the metric VALUES are the exact band-edge proof rows from
+    ``06-RESEARCH.md`` § "Noise-Band Defaults" → "CLS near-zero false-positive —
+    proof the band kills it" plus the score absolute-only rows. The Plan-04 band
+    gate (``regression.flag``) is calibrated against these:
+
+      url_key                       metric      prev -> cur   RunDelta            band verdict
+      ----------------------------  ----------  -----------   -----------------   ------------
+      /cls-near-zero                cls         0.01 -> 0.02  Δabs 0.01, +100%    NOT flagged (0.01 < 0.02 abs floor)
+      /cls-clear-regression         cls         0.05 -> 0.12  Δabs 0.07, +140%    FLAGGED regression (≥0.02 AND ≥25%)
+      /cls-zero-baseline-flag       cls         0.0  -> 0.05  Δabs 0.05, pct None FLAGGED (zero baseline → abs-only, 0.05 ≥ 0.02)
+      /cls-zero-baseline-noflag     cls         0.0  -> 0.01  Δabs 0.01, pct None NOT flagged (abs-only, 0.01 < 0.02)
+      /score-noflag                 perf_score  88   -> 90    Δabs 2,  pct n/a    NOT flagged (abs-only, 2 < 3 floor)
+      /score-flag                   perf_score  88   -> 92    Δabs 4,  pct n/a    FLAGGED (abs-only, 4 ≥ 3)
+
+    ``cls`` is a ``MetricSample`` (compared by ``median``); ``perf_score`` is a
+    plain float on the 0-100 Lighthouse scale (the band's ``perf_score`` abs floor
+    of 3 points operates on that scale). All ``started_at`` are tz-aware UTC per the
+    ``RunRecord`` D-17 validator. Values are kept EXACTLY as RESEARCH specifies so
+    the proofs hold.
+    """
+    base = "https://studyhalo.com"
+
+    def _cls_page(slug: str, median: float) -> PageResult:
+        return PageResult(
+            url=f"{base}{slug}",
+            url_key=f"{base}{slug}",
+            cls=MetricSample(median=median),
+        )
+
+    def _score_page(slug: str, score: float) -> PageResult:
+        return PageResult(
+            url=f"{base}{slug}",
+            url_key=f"{base}{slug}",
+            perf_score=score,
+        )
+
+    previous = RunRecord(
+        started_at=datetime(2026, 5, 1, tzinfo=UTC),
+        target=base,
+        pages=[
+            _cls_page("/cls-near-zero", 0.01),
+            _cls_page("/cls-clear-regression", 0.05),
+            _cls_page("/cls-zero-baseline-flag", 0.0),
+            _cls_page("/cls-zero-baseline-noflag", 0.0),
+            _score_page("/score-noflag", 88.0),
+            _score_page("/score-flag", 88.0),
+        ],
+    )
+    current = RunRecord(
+        started_at=datetime(2026, 5, 25, tzinfo=UTC),
+        target=base,
+        pages=[
+            _cls_page("/cls-near-zero", 0.02),
+            _cls_page("/cls-clear-regression", 0.12),
+            _cls_page("/cls-zero-baseline-flag", 0.05),
+            _cls_page("/cls-zero-baseline-noflag", 0.01),
+            _score_page("/score-noflag", 90.0),
+            _score_page("/score-flag", 92.0),
         ],
     )
     return previous, current
