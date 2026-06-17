@@ -31,6 +31,7 @@ delta-column set / formatting direction from ``registry.METRIC_POLARITY`` — ne
 re-spelled here.
 """
 
+import importlib
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -196,6 +197,19 @@ def test_schema_superset_of_csv() -> None:
     # No metric in the polarity registry is silently un-delta'd.
     for metric in METRIC_POLARITY:
         assert f"delta_{metric}" in sheets.SHEET_COLUMNS
+
+
+def test_drift_guard_survives_optimize() -> None:
+    """WR-04: the D-09 drift guard is an unconditional ``if/raise``, not an ``assert``.
+
+    Importing ``perfcrawl.sheets`` under ``python -O`` (which strips ``assert``
+    statements) must still enforce the superset invariant at module load. We assert
+    the runtime invariant with a real ``==`` against ``list(CSV_COLUMNS)`` so the
+    check does not rely on the optimizer-stripped ``assert`` form, and confirm the
+    module re-imports cleanly.
+    """
+    importlib.reload(sheets)  # module imports cleanly (guard did not raise)
+    assert sheets.SHEET_COLUMNS[: len(CSV_COLUMNS)] == list(CSV_COLUMNS)
 
 
 # --------------------------------------------------------------------------- #

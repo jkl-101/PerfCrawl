@@ -77,7 +77,13 @@ _AI_COLUMNS: list[str] = ["observation", "potential_cause", "suggested_optimizat
 SHEET_COLUMNS: list[str] = (
     list(CSV_COLUMNS) + [f"delta_{metric}" for metric in METRIC_POLARITY] + _AI_COLUMNS
 )
-assert SHEET_COLUMNS[: len(CSV_COLUMNS)] == CSV_COLUMNS  # D-09 drift guard (load-bearing)
+# D-09 drift guard (load-bearing). An unconditional ``if ... raise`` rather than an
+# ``assert`` so it survives ``python -O`` / ``-OO`` / ``PYTHONOPTIMIZE`` (which strip
+# asserts), keeping the runtime superset invariant enforced in optimized deployments.
+if SHEET_COLUMNS[: len(CSV_COLUMNS)] != list(CSV_COLUMNS):
+    raise RuntimeError(
+        "SHEET_COLUMNS must start with CSV_COLUMNS (D-09 drift guard)"
+    )
 
 # --- D-11: the two conditional-format fills (worse / better) ---
 RED = Color(0.96, 0.80, 0.80)  # worse
