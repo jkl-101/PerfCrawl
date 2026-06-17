@@ -17,7 +17,7 @@ These pin the observable model contract every downstream phase targets:
 """
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -194,6 +194,23 @@ def test_started_at_must_be_tz_aware():
     assert aware.started_at.tzinfo is not None
     aware_z = RunRecord(started_at="2026-05-25T12:00:00Z", target="x")
     assert aware_z.started_at.tzinfo is not None
+
+
+def test_started_at_normalized_to_utc():
+    """WR-03: an aware non-UTC started_at is normalized to UTC so lexical == chronological.
+
+    ``read_previous_run`` orders runs by ``started_at.isoformat()`` TEXT; lexical
+    string ordering equals chronological ordering only when every persisted timestamp
+    shares the same UTC offset. The validator normalizes any aware datetime to UTC.
+    """
+    non_utc = datetime(2026, 1, 1, 12, 0, tzinfo=timezone(timedelta(hours=5)))
+    run = RunRecord(started_at=non_utc, target="x")
+    # offset normalized to +00:00 ...
+    assert run.started_at.utcoffset() == timedelta(0)
+    # ... and the persisted isoformat() carries the UTC offset suffix.
+    assert run.started_at.isoformat().endswith("+00:00")
+    # The instant is preserved (12:00+05:00 == 07:00 UTC).
+    assert run.started_at.hour == 7
 
 
 def test_run_record_metadata():
