@@ -336,3 +336,80 @@ def test_write_run_is_atomic_on_failure(sample_run: RunRecord):
         assert pages == 0, "no page_results rows may survive a rolled-back write"
     finally:
         conn.close()
+
+
+# --- Phase 6 HIST-02 / D-04: prior-run baseline lookup (RED) -----------------
+# These pin the (not-yet-existing) ``store.read_previous_run`` contract that the
+# regression layer needs: "get the immediately-prior run for this target". They
+# are AUTHORED BEFORE the implementation (Wave-0) and MUST fail until Plan 04 adds
+# the function. ``read_previous_run`` is imported LAZILY inside each test so only
+# THESE two tests go red — the rest of this module keeps collecting cleanly (no
+# collateral breakage in a default ``pytest`` run).
+
+
+def _run_for(target: str, started_at, run_id):
+    """A minimal one-page RunRecord for a target at a given tz-aware time."""
+    from uuid import UUID
+
+    from perfcrawl.models import PageResult
+
+    return RunRecord(
+        id=UUID(run_id),
+        started_at=started_at,
+        target=target,
+        pages=[PageResult(url=f"{target}/", url_key=f"{target}/")],
+    )
+
+
+def test_read_previous_run_none(conn):
+    """No prior run for a target -> returns None, NOT a raise (the first-run case).
+
+    The very first audit of a site has no baseline; that is legitimate, not an
+    error. ``read_previous_run`` must return ``None`` so the caller can simply
+    skip regression flagging (D-04 / D-14: a first run never errors, never flags).
+    """
+    from datetime import UTC, datetime
+
+    from perfcrawl.store import read_previous_run  # RED: Plan 04 adds this.
+
+    # A single run exists, but the lookup is for a DIFFERENT target.
+    write_run(
+        conn,
+        _run_for(
+            "https://studyhalo.com",
+            datetime(2026, 5, 1, tzinfo=UTC),
+            "11111111-0000-4000-8000-000000000001",
+        ),
+    )
+    result = read_previous_run(
+        conn, "https://other.example", datetime(2026, 6, 1, tzinfo=UTC).isoformat()
+    )
+    assert result is None
+
+
+def test_read_previous_run_picks_prior(conn):
+    """Returns the immediately-prior run for the target — never the current one (D-04).
+
+    Two runs for the same target with increasing ``started_at`` are written; the
+    lookup with the LATER run's timestamp must return the EARLIER run (the
+    ``started_at < before`` filter excludes the current run from being its own
+    baseline — Pitfall 4).
+    """
+    from datetime import UTC, datetime
+
+    from perfcrawl.store import read_previous_run  # RED: Plan 04 adds this.
+
+    target = "https://studyhalo.com"
+    earlier = _run_for(
+        target, datetime(2026, 5, 1, tzinfo=UTC), "22222222-0000-4000-8000-000000000002"
+    )
+    later = _run_for(
+        target, datetime(2026, 5, 25, tzinfo=UTC), "33333333-0000-4000-8000-000000000003"
+    )
+    write_run(conn, earlier)
+    write_run(conn, later)
+
+    result = read_previous_run(conn, target, later.started_at.isoformat())
+    assert result is not None
+    assert result.id == earlier.id
+    assert result.id != later.id

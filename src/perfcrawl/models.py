@@ -22,7 +22,7 @@ Key forward-compat mechanics:
     additive evolution adds them for free once the security spike lands.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
@@ -203,15 +203,18 @@ class RunRecord(BaseModel):
     @field_validator("started_at")
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
-        """Enforce the D-17 tz-aware contract on ``started_at`` (WR-04).
+        """Enforce the D-17 tz-aware contract on ``started_at`` and normalize to UTC (WR-03).
 
         Nothing previously enforced tz-awareness despite the documented "tz-aware
         ISO-8601 timestamp" contract, so a naive datetime round-tripped and stored
         an offset-less ISO string. Cross-run regression ("get the previous run for
-        URL X") orders runs by this timestamp; naive timestamps make ordering
-        ambiguous across DST/timezone boundaries and can mis-select the previous
-        run. Reject naive datetimes at the model layer so this stays correct.
+        URL X") orders runs by this timestamp's ``isoformat()`` TEXT; lexical string
+        ordering equals chronological ordering ONLY when every persisted timestamp
+        shares the same UTC offset. So beyond rejecting naive datetimes, normalize
+        any aware datetime to UTC (``v.astimezone(UTC)``) so every stored
+        ``isoformat()`` ends in ``+00:00`` and lexical order == chronological order
+        even when a future API/import path supplies an aware non-UTC datetime.
         """
         if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
             raise ValueError("started_at must be timezone-aware (D-17)")
-        return v
+        return v.astimezone(UTC)

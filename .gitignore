@@ -35,6 +35,13 @@ output/
 *.authstate.json
 .perfcrawl/
 
+# Google Sheets service-account JSON key (Phase 6 / OUT-02 / D-12) — NEVER
+# committed. PERFCRAWL_SHEETS_SA holds only the PATH to this file; the key file
+# itself is credential-equivalent. Ignore the conventional naming patterns so a
+# stray key dropped beside the repo is never staged.
+*.sa.json
+*service-account*.json
+
 # GSD planning state — per-machine AI-orchestration state, never shared via git
 .planning/
 

@@ -368,3 +368,59 @@ def cwv_band(value: float | None, good: float, poor: float) -> str:
     if value <= poor:
         return "needs-improvement"
     return "poor"
+
+
+# --- Phase 6 regression flagging + Sheets constants (D-01/D-02/D-10/D-12) ----
+# The ONE editable place for every Phase-6 noise-band literal and the Sheets
+# service-account env-var NAME. `regression.py` imports METRIC_BAND from HERE;
+# `sheets.py` reads PERFCRAWL_SHEETS_SA_ENV from HERE — never inline a band
+# floor, a percent threshold, or the env-var name at a call site (the Phase-1
+# single-source grep discipline extends to these).
+
+# D-01/D-02: per-metric noise band. Maps each numeric metric field name to
+# ``(abs_floor, pct_floor)``:
+#   - ``abs_floor``  — the absolute change below which a delta is noise (units
+#                      match the metric: ms, bytes, count, score points, CLS units).
+#   - ``pct_floor``  — the percent change (relative to the previous run's value)
+#                      below which a delta is noise. ``None`` means absolute-only:
+#                      the four Lighthouse ``*_score`` metrics (0-100 scale) gate
+#                      on the abs floor ALONE — a percent band on a small score
+#                      base is misleading, so D-02 makes them absolute-only.
+#
+# A delta is FLAGGED as a real regression/improvement only when it clears BOTH
+# the abs floor AND (when ``pct_floor`` is not None) the pct floor.
+#
+# Zero-baseline fallback rule (D-01): when the previous run's value is 0 (or the
+# metric is otherwise one-sided so ``delta_pct`` is None / undefined), the pct
+# gate cannot be computed — gate on the ABS floor alone. This mirrors the
+# RunDelta engine's ``previous == 0`` guard (Phase 1, D-10).
+#
+# Keys MUST exactly equal ``set(registry.METRIC_POLARITY)`` (all 11 numeric
+# metrics): every banded metric is a polarity metric and vice versa. A new
+# metric is a one-line edit in BOTH tables.
+METRIC_BAND: dict[str, tuple[float, float | None]] = {
+    # lower-is-better (abs_floor, pct_floor)
+    "lcp_ms": (200, 10.0),
+    "cls": (0.02, 25.0),
+    "inp_proxy_tbt_ms": (50, 20.0),
+    "ttfb_ms": (100, 20.0),
+    "total_bytes": (51200, 10.0),
+    "request_count": (5, 10.0),
+    "slowest_request_ms": (150, 20.0),
+    # higher-is-better Lighthouse scores — absolute-only (pct_floor=None, D-02)
+    "perf_score": (3, None),
+    "a11y_score": (2, None),
+    "seo_score": (2, None),
+    "best_practices_score": (2, None),
+}
+
+# D-10: the env var the Google Sheets service-account JSON *path* is read from.
+# Credential intake is env-only — the SA-JSON path is NEVER a Typer Option
+# (argv is visible in `ps`/shell history), matching the *_API_KEY_ENV posture.
+# The env var holds only the filesystem PATH; the key contents are never
+# serialized into a constant or an output artifact (T-06-01 mitigation).
+PERFCRAWL_SHEETS_SA_ENV: str = "PERFCRAWL_SHEETS_SA"
+
+# D-10 / ExitCode decision: a missing/unreadable SA-JSON env on the Sheets
+# output path REUSES the existing `ExitCode.USER_ERROR = 1` (bad invocation) —
+# NO new ExitCode member is added, mirroring the Phase-5 missing-key fail-fast.

@@ -33,12 +33,13 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import gspread
 import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from perfcrawl import analysis
+from perfcrawl import analysis, regression, sheets
 from perfcrawl.auth import AuthError, make_scrubber, resolve_auth_state
 from perfcrawl.constants import (
     AI_DEGRADED_WARN_FRACTION,
@@ -51,9 +52,11 @@ from perfcrawl.constants import (
     DEFAULT_MIN_DELAY_S,
     DEFAULT_SAMPLES_N,
     INP_PROXY_DISPLAY_LABEL,
+    METRIC_BAND,
     OPENAI_API_KEY_ENV,
     OPENROUTER_API_KEY_ENV,
     PERFCRAWL_PASSWORD_ENV,
+    PERFCRAWL_SHEETS_SA_ENV,
     PERFCRAWL_USERNAME_ENV,
     PROVIDERS,
     ExitCode,
@@ -64,6 +67,8 @@ from perfcrawl.crawl.discovery import discover
 from perfcrawl.crawl.measure_pass import measure_pass
 from perfcrawl.crawl.robots import fetch_robots_gate
 from perfcrawl.crawl.scope import is_denied
+from perfcrawl.delta import compute_deltas
+from perfcrawl.models import DirectionStatus
 from perfcrawl.orchestrator import (
     MeasurementError,
     UserError,
@@ -72,7 +77,8 @@ from perfcrawl.orchestrator import (
 )
 from perfcrawl.output import write_outputs
 from perfcrawl.provider import build_provider, resolve_provider
-from perfcrawl.store import init_db, write_run
+from perfcrawl.regression import BandResult
+from perfcrawl.store import init_db, read_previous_run, write_run
 
 
 def _load_dotenv_if_present() -> None:
@@ -437,6 +443,186 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     out_console.print(table)
 
 
+# --- OUT-01 / D-05/D-06/D-07: the --output token contract ----------------------
+# The closed set of output formats --output accepts (a comma-list). ``csv``/``json``/
+# ``artifacts`` are on-disk sinks owned by write_outputs (output.py); ``sheets`` is a
+# network sink the CLI routes to sheets.write_sheets. The default INCLUDES artifacts
+# so the raw Lighthouse JSON+HTML the existing workflow archives still land by default
+# (matches the pre-Phase-6 on-disk layout — test_on_disk_layout / the crawl
+# artifacts test); ``sheets`` is opt-in only (D-06: a default run never authenticates
+# or writes to Google Sheets).
+_VALID_OUTPUT_TOKENS: frozenset[str] = frozenset({"csv", "json", "sheets", "artifacts"})
+_FILE_OUTPUT_TOKENS: frozenset[str] = frozenset({"csv", "json", "artifacts"})
+_DEFAULT_OUTPUT: str = "csv,json,artifacts"
+
+# Cap on the regression-summary offenders list (D-13: counts + top-N by magnitude).
+_REGRESSION_TOP_N: int = 10
+
+
+def _emit_err(message: str, scrub) -> None:
+    """Print one error/warning line on stderr, scrubbed when a scrubber is seeded."""
+    err_console.print(scrub(message) if scrub else message)
+
+
+def _resolve_output_tokens(output: str, sheets_id: str | None) -> set[str]:
+    """Parse + validate ``--output`` at t=0, BEFORE any measurement (D-05/D-06/D-07).
+
+    Splits the comma-list into a token set and validates it against the closed
+    allowlist (T-06-12). An unknown token fails fast with ``USER_ERROR`` before a
+    single page is measured. When ``sheets`` is selected (and ONLY then — D-06) the
+    Sheets prerequisites are also checked at t=0: a non-empty ``--sheets-id`` AND the
+    ``PERFCRAWL_SHEETS_SA`` env var set (the service-account JSON PATH; env-only,
+    never a flag — T-06-14). The file is NOT opened/validated here — that happens in
+    ``sheets.write_sheets`` — so a default run never touches the network and a
+    sheets run fails fast on a missing credential rather than after a full crawl.
+    """
+    tokens = {t.strip() for t in output.split(",") if t.strip()}
+    unknown = sorted(tokens - _VALID_OUTPUT_TOKENS)
+    if unknown:
+        err_console.print(
+            f"[red]error:[/red] unknown --output token(s): {', '.join(unknown)} "
+            "(valid: artifacts, csv, json, sheets)"
+        )
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+    if "sheets" in tokens:
+        # A key in a gitignored .env should count for the SA path too.
+        _load_dotenv_if_present()
+        if not (sheets_id or "").strip():
+            err_console.print(
+                "[red]error:[/red] --output sheets requires --sheets-id "
+                "(a Google Sheet key or full URL)"
+            )
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+        if not (os.environ.get(PERFCRAWL_SHEETS_SA_ENV) or "").strip():
+            err_console.print(
+                f"[red]error:[/red] --output sheets requires the {PERFCRAWL_SHEETS_SA_ENV} "
+                "env var (path to the service-account JSON); it is unset. The path is "
+                "env-only, never a flag."
+            )
+            raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+    return tokens
+
+
+def _compute_regression(conn, run_record) -> tuple[list[BandResult], bool]:
+    """Compare the just-stored run to its previous same-target run (HIST-02 / D-04).
+
+    Returns ``(band_results, had_baseline)``. ``read_previous_run`` is passed the
+    CURRENT run's ``started_at`` so the run can never be its own baseline (Pitfall 4);
+    on the first-ever run for a target it returns ``None`` → ``([], False)`` (a first
+    run never flags — D-04). Otherwise the raw ``compute_deltas`` go through the
+    HIST-02 hybrid noise band (``flag_run``) and the resulting ``BandResult`` list is
+    returned for BOTH the Rich summary (D-13) and the Sheets delta columns (D-11).
+    This NEVER raises typer.Exit on a flag — flags are informational only (D-14).
+    """
+    previous = read_previous_run(
+        conn, run_record.target, run_record.started_at.isoformat()
+    )
+    if previous is None:
+        return [], False
+    return regression.flag_run(compute_deltas(run_record, previous)), True
+
+
+def _band_multiple(br: BandResult) -> float:
+    """Normalized offender magnitude: how many abs-floors the delta cleared (WR-02).
+
+    Cross-metric-comparable (a 0.05 CLS move and a 500ms LCP move become rankable
+    on the same scale) so small-unit regressions aren't truncated out of the top-N.
+    Ranking on raw ``abs(delta_abs)`` mixes units (bytes vs ms vs CLS vs score
+    points), so a large-unit metric always outranks a genuine small-unit regression.
+    """
+    abs_floor = METRIC_BAND.get(br.metric, (0.0, None))[0]
+    delta = abs(br.delta.delta_abs or 0.0)
+    return delta / abs_floor if abs_floor else delta
+
+
+def _render_regression_summary(
+    band_results: list[BandResult], *, had_baseline: bool, target: str
+) -> None:
+    """Surface band-flagged regressions/improvements in a Rich summary (D-13/D-14).
+
+    INFORMATIONAL ONLY: this never raises typer.Exit (the exit code is independent of
+    any flag — D-14). On a first run (no baseline) it prints a neutral note, NOT an
+    error (D-04). Otherwise it shows counts of flagged regressions (▲ worse) vs
+    improvements (▼ better) and the top-N offenders by NORMALIZED band-multiple
+    magnitude (``abs(delta_abs) / abs_floor`` — how many noise-bands each delta
+    cleared, comparable across units). Only FLAGGED BandResults appear — within-band
+    movement is not surfaced.
+    """
+    origin = _origin_of(target)
+    if not had_baseline:
+        out_console.print(
+            f"[dim]No prior run for {origin} to compare — "
+            "regression flagging starts on the next run.[/dim]"
+        )
+        return
+
+    flagged = [br for br in band_results if br.flagged]
+    if not flagged:
+        out_console.print(
+            f"[dim]No band-flagged regressions vs the previous run of {origin}.[/dim]"
+        )
+        return
+
+    regressions = sum(1 for br in flagged if br.direction is DirectionStatus.REGRESSION)
+    improvements = sum(1 for br in flagged if br.direction is DirectionStatus.IMPROVEMENT)
+
+    table = Table(title="perfcrawl: regression band (vs previous run)")
+    table.add_column("Page", style="bold", overflow="fold")
+    table.add_column("Metric")
+    table.add_column("Δ", justify="right")
+    table.add_column("", justify="center")
+
+    top = sorted(flagged, key=_band_multiple, reverse=True)
+    for br in top[:_REGRESSION_TOP_N]:
+        if br.direction is DirectionStatus.REGRESSION:
+            arrow = "[red]▲ worse[/red]"
+        else:
+            arrow = "[green]▼ better[/green]"
+        delta_abs = br.delta.delta_abs
+        delta_s = "-" if delta_abs is None else f"{delta_abs:+.3g}"
+        table.add_row(_relativize_url(br.delta.url_key, origin), br.metric, delta_s, arrow)
+
+    table.caption = f"{regressions} regression(s) · {improvements} improvement(s) flagged"
+    out_console.print(table)
+
+
+def _write_sheets_sink(
+    run_record, *, sheets_id: str | None, band_results: list[BandResult], scrub
+) -> None:
+    """Route the run to the scrubbed, env-credentialed Sheets writer (D-10/D-12).
+
+    The service-account JSON PATH is read from ``PERFCRAWL_SHEETS_SA`` ONLY (validated
+    present at t=0) and is NEVER printed/serialized (T-06-14). The SAME key-seeded
+    ``scrub`` closure used for the on-disk sinks is threaded in so a credential
+    embedded in a page URL never reaches a Sheets cell (D-12 / CR-01). A gspread 403
+    maps to a clear USER_ERROR naming the share-the-sheet remedy (RESEARCH Pitfall 6);
+    any other gspread failure surfaces scrubbed without leaking the SA path.
+    """
+    try:
+        sheets.write_sheets(
+            run_record,
+            sheets_id=sheets_id,
+            creds_path=os.environ[PERFCRAWL_SHEETS_SA_ENV],
+            band_results=band_results,
+            scrub=scrub,
+        )
+    except gspread.exceptions.APIError as e:
+        text = str(e)
+        if "403" in text or "PERMISSION_DENIED" in text:
+            _emit_err(
+                "[red]error:[/red] Google Sheets denied access (403). Share the "
+                "target sheet with the service-account email (the client_email in "
+                "your service-account JSON) as an Editor, then retry.",
+                scrub,
+            )
+        else:
+            _emit_err(f"[red]error:[/red] Google Sheets write failed: {e}", scrub)
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+    except Exception as e:  # noqa: BLE001 — scrubbed message, never an SA-path traceback
+        _emit_err(f"[red]error:[/red] Google Sheets write failed: {e}", scrub)
+        raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+
 @app.command()
 def measure(
     url: str = typer.Argument(..., help="URL to audit"),
@@ -497,8 +683,26 @@ def measure(
         "--output-dir",
         help="Per-run artifacts land under <output_dir>/<run_id>/ (D-07).",
     ),
+    output: str = typer.Option(
+        _DEFAULT_OUTPUT,
+        "--output",
+        help="Comma-list of output formats: csv,json,artifacts,sheets (default: "
+        f"{_DEFAULT_OUTPUT}). 'sheets' requires --sheets-id + the "
+        f"{PERFCRAWL_SHEETS_SA_ENV} env var and is opt-in only (a default run never "
+        "writes to Google Sheets; D-06). An unknown token fails fast (D-07).",
+    ),
+    sheets_id: str | None = typer.Option(
+        None,
+        "--sheets-id",
+        help="Target Google Sheet — a bare key or a full URL (D-10). Required when "
+        "'sheets' is in --output. Non-secret, so a flag is fine.",
+    ),
 ) -> None:
     """Measure ``URL`` end-to-end: Chrome → LH → outputs → SQLite → stdout."""
+    # --- OUT-01 / D-05/D-06/D-07: parse + validate --output at t=0, BEFORE any
+    # measurement. An unknown token (or a sheets selection missing its --sheets-id /
+    # SA env) fails fast here so a bad invocation never costs a Chrome launch.
+    tokens = _resolve_output_tokens(output, sheets_id)
     # --- D-01 / D-02 / D-10: --ai resolves a provider from the env ONLY (the key is
     # never a flag — argv is visible in ps/history). resolve_provider implements the
     # D-01 order (explicit --ai-provider wins → Anthropic-wins tie-break → OpenAI →
@@ -543,13 +747,23 @@ def measure(
     # absent second key is a no-op; never write a second redactor) and thread it into
     # write_outputs. A non-AI measure run keeps the prior behavior (scrub=None →
     # identity in write_outputs).
+    # D-12 / CR-01 (scrub-every-sink): seed the VALUE scrubber whenever a
+    # credential-bearing sink is in play — an --ai run (provider keys) OR a --output
+    # sheets run. The factory filters falsy secrets (auth.py:80) so an absent key is a
+    # no-op; a plain non-AI, non-sheets run keeps scrub=None → identity. NOTE the
+    # value scrubber only redacts the exact CONFIGURED secret strings — for a
+    # credential embedded directly in a page URL (https://user:SECRET@host/) on the
+    # no-secret path it is identity. That gap is covered UNCONDITIONALLY at the output
+    # boundary by output.redact_url_userinfo (WR-01), which strips scheme://user:pass@
+    # userinfo from every URL written to result.csv / result.json / a Sheets cell
+    # regardless of what secrets were seeded here.
     scrub = (
         make_scrubber(
             os.environ.get(ANTHROPIC_API_KEY_ENV),
             os.environ.get(OPENAI_API_KEY_ENV),
             os.environ.get(OPENROUTER_API_KEY_ENV),
         )
-        if ai
+        if (ai or "sheets" in tokens)
         else None
     )
 
@@ -577,22 +791,43 @@ def measure(
         )
 
     # --- Write outputs (OUT-03 / OUT-04). OSError → USER_ERROR per D-15. ---
+    # OUT-01: gate the on-disk writers on the selected file tokens (sheets is a
+    # network sink, handled separately below).
     try:
         run_dir = write_outputs(
-            run_record, output_dir=output_dir, raw_artifacts=raw_artifacts, scrub=scrub
+            run_record,
+            output_dir=output_dir,
+            raw_artifacts=raw_artifacts,
+            scrub=scrub,
+            formats=tokens & _FILE_OUTPUT_TOKENS,
         )
     except OSError as e:
         err_console.print(f"[red]error:[/red] cannot write to {output_dir}: {e}")
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
-    # --- Persist to SQLite (HIST-01). DB lives alongside the artifacts. ---
+    # --- Persist to SQLite (HIST-01) + compute the HIST-02 baseline comparison. ---
     db_path = output_dir / "perfcrawl.db"
     conn = sqlite3.connect(db_path)
     try:
         init_db(conn)  # idempotent per Phase 1 contract
-        write_run(conn, run_record)
+        try:
+            write_run(conn, run_record)
+        except sqlite3.IntegrityError as e:
+            # A duplicate run id (re-persisting an already-stored run) must never
+            # crash a run whose artifacts are already on disk — surface a warning
+            # and keep the exit code unchanged. The current run is then absent from
+            # the store, so the baseline lookup below simply finds no NEW baseline.
+            _emit_err(f"[yellow]warning:[/yellow] run not persisted: {e}", scrub)
+        band_results, had_baseline = _compute_regression(conn, run_record)
     finally:
         conn.close()
+
+    # --- OUT-02 / D-10: route to Google Sheets when 'sheets' selected (after the
+    # AI post-pass so page.analysis is populated; band columns from the comparison). ---
+    if "sheets" in tokens:
+        _write_sheets_sink(
+            run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub
+        )
 
     # --- Render the final result on stdout (D-06). ---
     if output_json:
@@ -608,6 +843,10 @@ def measure(
         _render_human_table(run_record, samples=samples, run_dir=run_dir)
         # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
         _render_ai_health(ai_summary, scrub=scrub)
+        # HIST-02 / D-13: surface band-flagged regressions — informational only (D-14).
+        _render_regression_summary(
+            band_results, had_baseline=had_baseline, target=run_record.target
+        )
     # Implicit exit 0 (D-13: success-or-partial).
 
 
@@ -758,6 +997,20 @@ def crawl(
         "--output-dir",
         help="Per-run artifacts land under <output_dir>/<run_id>/ (D-07).",
     ),
+    output: str = typer.Option(
+        _DEFAULT_OUTPUT,
+        "--output",
+        help="Comma-list of output formats: csv,json,artifacts,sheets (default: "
+        f"{_DEFAULT_OUTPUT}). 'sheets' requires --sheets-id + the "
+        f"{PERFCRAWL_SHEETS_SA_ENV} env var and is opt-in only (a default run never "
+        "writes to Google Sheets; D-06). An unknown token fails fast (D-07).",
+    ),
+    sheets_id: str | None = typer.Option(
+        None,
+        "--sheets-id",
+        help="Target Google Sheet — a bare key or a full URL (D-10). Required when "
+        "'sheets' is in --output. Non-secret, so a flag is fine.",
+    ),
     output_json: bool = typer.Option(
         False,
         "--json",
@@ -783,6 +1036,11 @@ def crawl(
             f"[red]error:[/red] --emulation must be 'mobile' or 'desktop'; got {emulation!r}"
         )
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
+
+    # OUT-01 / D-05/D-06/D-07: parse + validate --output at t=0, BEFORE discovery or
+    # any measurement. An unknown token (or a sheets selection missing its --sheets-id
+    # / SA env) fails fast here so a bad invocation never produces a silent no-op crawl.
+    tokens = _resolve_output_tokens(output, sheets_id)
 
     # D-01: the two auth inputs are mutually exclusive — a saved storage_state OR
     # a driven form login, never both.
@@ -1044,25 +1302,39 @@ def crawl(
     # truncate the file on a short write. Scrubbing inside the single atomic
     # write removes both the leak and the window, and means a future fourth
     # text output sink cannot silently miss the scrubber.
+    # OUT-01: gate the on-disk writers on the selected file tokens (sheets handled below).
     try:
         run_dir = write_outputs(
             run_record,
             output_dir=output_dir,
             raw_artifacts=scrubbed_artifacts,
             scrub=scrub,
+            formats=tokens & _FILE_OUTPUT_TOKENS,
         )
     except OSError as e:
         err_console.print(scrub(f"[red]error:[/red] cannot write to {output_dir}: {e}"))
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
 
-    # --- Persist the one multi-page run to SQLite (HIST-01). ---
+    # --- Persist the one multi-page run to SQLite (HIST-01) + HIST-02 comparison. ---
     db_path = output_dir / "perfcrawl.db"
     conn = sqlite3.connect(db_path)
     try:
         init_db(conn)
-        write_run(conn, run_record)
+        try:
+            write_run(conn, run_record)
+        except sqlite3.IntegrityError as e:
+            # A duplicate run id must never crash a crawl whose artifacts are already
+            # on disk — warn and keep the exit code unchanged (D-14 persist posture).
+            _emit_err(f"[yellow]warning:[/yellow] run not persisted: {e}", scrub)
+        band_results, had_baseline = _compute_regression(conn, run_record)
     finally:
         conn.close()
+
+    # --- OUT-02 / D-10: route to Google Sheets when 'sheets' selected. ---
+    if "sheets" in tokens:
+        _write_sheets_sink(
+            run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub
+        )
 
     # --- Render the multi-page result on stdout (D-06). ---
     if output_json:
@@ -1074,6 +1346,10 @@ def crawl(
         _render_crawl_summary(run_record, samples=samples, run_dir=run_dir)
         # scrub threaded so any judge-lane calibration note is key-redacted (AUTH-04).
         _render_ai_health(ai_summary, scrub=scrub)
+        # HIST-02 / D-13: surface band-flagged regressions — informational only (D-14).
+        _render_regression_summary(
+            band_results, had_baseline=had_baseline, target=run_record.target
+        )
 
     # AUTH-03 / D-06: a mid-crawl session loss flushed the already-measured
     # authenticated pages as a valid tagged-partial run (written + persisted

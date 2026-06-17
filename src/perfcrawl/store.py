@@ -165,3 +165,35 @@ def read_run(conn: sqlite3.Connection, run_id: str) -> RunRecord:
     if row is None:
         raise KeyError(f"no run with id {run_id!r}")
     return RunRecord.model_validate_json(row[0])
+
+
+def read_previous_run(
+    conn: sqlite3.Connection, target: str, before_started_at: str
+) -> RunRecord | None:
+    """Return the immediately-prior same-target run, or ``None`` (D-04 baseline).
+
+    The HIST-02 regression layer needs the run to diff the *current* run against:
+    the most recent earlier run for the SAME ``target``. This is the point lookup
+    analog of ``read_run`` — same ``model_validate_json`` round-trip — but it
+    returns ``None`` (NOT a ``KeyError``) when there is no prior run, because the
+    very first audit of a site legitimately has no baseline (the caller then skips
+    regression flagging; a first run never errors, never flags — D-04/D-14).
+
+    ``before_started_at`` is the CURRENT run's ``started_at.isoformat()`` supplied
+    by the caller (Plan 06). The ``started_at < ?`` filter is what keeps the
+    current run from being selected as its own baseline (Pitfall 4): the lookup
+    only ever sees runs strictly OLDER than the one being analyzed, and
+    ``ORDER BY started_at DESC LIMIT 1`` picks the immediately-prior one.
+
+    Security (threat T-06-06 / T-01-T): ``target`` and ``before_started_at`` are
+    bound as ``?`` placeholders — never f-string / ``%`` / ``.format`` SQL — and
+    there are no dynamic table/column names.
+    """
+    row = conn.execute(
+        "SELECT record_json FROM runs WHERE target = ? AND started_at < ? "
+        "ORDER BY started_at DESC LIMIT 1",
+        (target, before_started_at),
+    ).fetchone()
+    if row is None:
+        return None
+    return RunRecord.model_validate_json(row[0])

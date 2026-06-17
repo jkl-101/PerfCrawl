@@ -151,6 +151,53 @@ def test_url_embedded_credential_scrubbed_from_csv_and_json(tmp_path: Path) -> N
     assert "***REDACTED***" in csv_text
 
 
+def test_url_userinfo_stripped_on_no_secret_path(tmp_path: Path) -> None:
+    """WR-01: URL-embedded credentials are stripped even when scrub is identity.
+
+    On a plain ``measure --output sheets`` run with no provider secrets, the seeded
+    value scrubber is identity. ``output.redact_url_userinfo`` must still strip
+    ``scheme://user:pass@`` userinfo from ``page.url`` and ``slowest_request_url`` so
+    a credential never reaches result.csv / result.json — while the host/path survives.
+    """
+    secret = "SECRET"
+    leak_run = RunRecord(
+        id=UUID("3f1c2b9a-0000-4000-8000-000000000fff"),
+        started_at=datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC),
+        target="https://x.com/",
+        pages=[
+            PageResult(
+                url=f"https://user:{secret}@host/path",
+                url_key="https://host/path",
+                perf_score=80.0,
+                slowest_request_url=f"https://user:{secret}@host/api",
+            )
+        ],
+    )
+    # scrub=None → identity (the no-secret path).
+    run_dir = write_outputs(leak_run, output_dir=tmp_path, scrub=None)
+
+    csv_text = (run_dir / "result.csv").read_text()
+    json_text = (run_dir / "result.json").read_text()
+    for sink_name, text in (("result.csv", csv_text), ("result.json", json_text)):
+        assert secret not in text, f"credential leaked into {sink_name} (WR-01)"
+        assert "user:" not in text, f"userinfo leaked into {sink_name} (WR-01)"
+        # The host/path is NOT over-stripped.
+        assert "host/path" in text, f"host/path wrongly stripped from {sink_name}"
+
+
+def test_redact_url_userinfo_leaves_plain_url_untouched() -> None:
+    """WR-01: a plain ``scheme://host/path`` (no ``@`` userinfo) passes through unchanged."""
+    from perfcrawl.output import redact_url_userinfo
+
+    plain = "https://host.example.com/a/b?c=d#frag"
+    assert redact_url_userinfo(plain) == plain
+    # And a userinfo URL has ONLY the userinfo removed (scheme + host/path preserved).
+    assert (
+        redact_url_userinfo("https://user:SECRET@host.example.com/p")
+        == "https://host.example.com/p"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Raw LH artifacts (OUT-03) land at lighthouse/<page-slug>.{json,html}.
 # --------------------------------------------------------------------------- #
