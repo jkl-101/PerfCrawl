@@ -747,11 +747,16 @@ def measure(
     # absent second key is a no-op; never write a second redactor) and thread it into
     # write_outputs. A non-AI measure run keeps the prior behavior (scrub=None →
     # identity in write_outputs).
-    # D-12 / CR-01 (scrub-every-sink): seed the scrubber whenever a credential-bearing
-    # sink is in play — an --ai run (provider keys) OR a --output sheets run (page
-    # URLs / slowest_request_url can carry embedded creds that must not reach a Sheets
-    # cell). The factory filters falsy secrets (auth.py:80) so an absent key is a
-    # no-op; a plain non-AI, non-sheets run keeps scrub=None → identity.
+    # D-12 / CR-01 (scrub-every-sink): seed the VALUE scrubber whenever a
+    # credential-bearing sink is in play — an --ai run (provider keys) OR a --output
+    # sheets run. The factory filters falsy secrets (auth.py:80) so an absent key is a
+    # no-op; a plain non-AI, non-sheets run keeps scrub=None → identity. NOTE the
+    # value scrubber only redacts the exact CONFIGURED secret strings — for a
+    # credential embedded directly in a page URL (https://user:SECRET@host/) on the
+    # no-secret path it is identity. That gap is covered UNCONDITIONALLY at the output
+    # boundary by output.redact_url_userinfo (WR-01), which strips scheme://user:pass@
+    # userinfo from every URL written to result.csv / result.json / a Sheets cell
+    # regardless of what secrets were seeded here.
     scrub = (
         make_scrubber(
             os.environ.get(ANTHROPIC_API_KEY_ENV),

@@ -32,6 +32,7 @@ transaction wrapper — a write either lands whole or not at all (CR-01).
 import csv
 import io
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -69,6 +70,21 @@ CSV_COLUMNS: list[str] = [
     "lighthouse_version",    # RunRecord.lighthouse_version
     "emulation",             # RunRecord.emulation
 ]
+
+
+_URL_USERINFO_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#@\s\"']*@")
+
+
+def redact_url_userinfo(text: str) -> str:
+    """Strip ``scheme://user:pass@`` userinfo from any URL in ``text`` (WR-01).
+
+    Unconditional and value-independent — unlike the seeded scrubber this fires even
+    when no provider secrets are configured, so a credential embedded in a page URL
+    (``https://user:SECRET@host/``) never reaches result.csv / result.json / a Sheets
+    cell. Safe on bare URL strings and on serialized JSON/CSV text alike; a plain
+    ``https://host/`` (no ``@`` before the path) is left untouched.
+    """
+    return _URL_USERINFO_RE.sub(r"\1", text)
 
 
 def _identity_scrub(text: str) -> str:
@@ -111,14 +127,14 @@ def _build_csv_row(run: RunRecord, page: PageResult) -> dict[str, str]:
     return {
         # Phase 2 is single-URL; Phase 3 will fill this from <title>/path (Open Q2).
         "page": "",
-        "url": _stringify(page.url),
+        "url": redact_url_userinfo(_stringify(page.url)),
         "test_date": run.started_at.isoformat(),
         # RUN-03 invariant: every Phase 2 sample runs cold-cache.
         "cache_disabled": "TRUE",
         "total_page_load_time": _total_page_load_time(page),
         "request_count": _stringify(page.request_count),
         "total_bytes": _stringify(page.total_bytes),
-        "slowest_request_url": _stringify(page.slowest_request_url),
+        "slowest_request_url": redact_url_userinfo(_stringify(page.slowest_request_url)),
         "slowest_request_ms": _stringify(page.slowest_request_ms),
         "ttfb_ms": _stringify(_metric_sample_median(page.ttfb_ms)),
         "status_code": _stringify(page.status_code),
@@ -244,9 +260,13 @@ def write_outputs(
 
     # --- result.json: full-fidelity, atomic, scrubbed (OUT-01: gated on "json") ---
     if "json" in formats:
+        # WR-01: strip URL userinfo unconditionally (value-independent), THEN the
+        # seeded value-scrubber. Both are idempotent text passes; the userinfo strip
+        # catches an embedded ``https://user:SECRET@host/`` credential even on the
+        # no-secret path where ``scrub`` is identity.
         _atomic_write_text(
             run_dir / "result.json",
-            scrub(run_record.model_dump_json(indent=2)),
+            redact_url_userinfo(scrub(run_record.model_dump_json(indent=2))),
         )
 
     # --- result.csv: locked column order, atomic (OUT-01: gated on "csv") ---

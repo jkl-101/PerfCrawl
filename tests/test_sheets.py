@@ -298,3 +298,33 @@ def test_scrubber_seeded_into_sheets() -> None:
     assert secret not in joined, "credential leaked into a Sheets cell (CR-01 / D-12)"
     # Prove the scrubber actually fired (not that the URL merely happened to drop).
     assert REDACTION_PLACEHOLDER in joined
+
+
+def test_url_userinfo_stripped_in_sheet_row_no_secret_path() -> None:
+    """WR-01: URL userinfo is stripped from a Sheets row even when scrub is identity.
+
+    ``_build_sheet_row`` reuses ``output._build_csv_row``, so the unconditional
+    ``redact_url_userinfo`` strip on the ``url`` / ``slowest_request_url`` cells means
+    a credential embedded in a page URL never reaches a Sheets cell on the no-secret
+    path (where the value scrubber is identity).
+    """
+    secret = "SECRET"
+    run = RunRecord(
+        id=UUID("3f1c2b9a-0000-4000-8000-000000000aaa"),
+        started_at=datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC),
+        target="https://x.com/",
+        pages=[],
+    )
+    page = PageResult(
+        url=f"https://user:{secret}@host/dashboard/",
+        url_key="https://host/dashboard/",
+        perf_score=80.0,
+        slowest_request_url=f"https://user:{secret}@host/api",
+    )
+    row = sheets._build_sheet_row(run, page, {}, scrub=_identity_scrub)
+    cells = [str(cell) for cell in row]
+    joined = "\n".join(cells)
+    assert secret not in joined, "credential leaked into a Sheets cell (WR-01)"
+    assert "user:" not in joined
+    # Host/path survives (no over-stripping).
+    assert any("host/dashboard/" in c for c in cells)

@@ -28,10 +28,15 @@ Critical invariants:
     score mirrors.
 
   - **Scrub every cell (D-12 / CR-01).** Every string cell passes through ``scrub``
-    before ``append_rows``, so a credential embedded in ``page.url`` /
-    ``slowest_request_url`` (the as-measured PageResult fields) never reaches a
-    Sheets cell. The service-account JSON PATH is the only credential input and is
-    NEVER written into a cell/row/header.
+    before ``append_rows``. ``scrub`` is a *value-based* redactor: it only removes the
+    exact CONFIGURED secret strings it was seeded with, so on a no-secret run it is
+    identity. The unconditional, value-independent guarantee for a credential embedded
+    in ``page.url`` / ``slowest_request_url`` (the as-measured PageResult fields) is
+    ``output.redact_url_userinfo`` (WR-01): the Sheets row reuses ``output._build_csv_row``,
+    whose ``url`` / ``slowest_request_url`` cells already have their
+    ``scheme://user:pass@`` userinfo stripped before they ever reach a Sheets cell —
+    regardless of what (if anything) ``scrub`` was seeded with. The service-account
+    JSON PATH is the only credential input and is NEVER written into a cell/row/header.
 
   - **Spreadsheets-only scope (D-10 / threat T-06-10).** ``Credentials`` requests
     the ``spreadsheets`` scope ONLY (not ``drive``) — ``open_by_key`` /
