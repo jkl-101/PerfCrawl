@@ -1,18 +1,16 @@
-"""Phase-5 AI analysis — the public contract (Wave-0 stub).
+"""Phase-5 AI analysis — the per-page AI-enrichment seam.
 
-This module is the per-page AI-enrichment seam: it turns each measured
-``PageResult`` into a deterministic metric *digest*, dispatches one stateless
-structured-output call per page through the provider-agnostic
-``Provider.parse_structured(output_model=AnalysisResult)`` seam (D-04) via a
-bounded pool, and writes the grounded ``AnalysisResult`` (or a clean ``None``)
-back onto ``page.analysis`` — which the unchanged ``output.write_outputs`` /
-``store.write_run`` path then serializes for free.
+This module turns each measured ``PageResult`` into a deterministic metric
+*digest*, dispatches one stateless structured-output call per page through the
+provider-agnostic ``Provider.parse_structured(output_model=AnalysisResult)``
+seam (D-04) via a bounded pool, and writes the grounded ``AnalysisResult`` (or a
+clean ``None``) back onto ``page.analysis`` — which the unchanged
+``output.write_outputs`` / ``store.write_run`` path then serializes for free.
 
-**This file is an interface-first CONTRACT STUB.** Every public name the test
-harness imports exists here, but the request/response bodies raise
-``NotImplementedError`` — Plan 02 (engine) fills them and turns the Wave-0
-deterministic eval suite GREEN. The names + signatures are the binding contract
-between this plan's RED tests and the Plan-02 implementation:
+The public surface below is fully implemented (the bodies were completed in Plan
+02 and the deterministic eval suite under ``tests/eval`` is green). The names +
+signatures remain the binding contract between the eval RED tests and this
+implementation:
 
   - ``build_digest(page)``         — deterministic, sorted, timestamp-free digest text
   - ``RUBRIC``                     — the frozen ≥1,024-token cite-the-numbers system prefix
