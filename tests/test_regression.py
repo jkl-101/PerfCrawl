@@ -145,3 +145,47 @@ def test_band_preserves_raw_direction(band_pair):
         result = regression.flag(delta)
         assert result.flagged is False
         assert result.direction is status
+
+
+def test_offender_ranking_normalizes_units():
+    """WR-02: top-N offenders rank by normalized band-multiple, not raw delta_abs.
+
+    A small-unit metric (cls, abs_floor 0.02) that clears its band by a LARGER
+    multiple must outrank a large-unit metric (total_bytes, abs_floor 51200) that
+    clears by a SMALLER multiple — even though the raw ``abs(delta_abs)`` of the
+    large-unit metric is orders of magnitude bigger. Raw-magnitude sorting would
+    truncate the genuine CLS regression out of the summary.
+    """
+    from perfcrawl.cli import _band_multiple
+
+    # cls: 0.2 / 0.02 abs_floor = 10 noise-bands cleared (small raw magnitude).
+    cls_br = regression.flag(
+        RunDelta(
+            url_key=f"{BASE}/cls",
+            metric="cls",
+            current=0.25,
+            previous=0.05,
+            delta_abs=0.2,
+            delta_pct=400.0,
+            direction=DirectionStatus.REGRESSION,
+        )
+    )
+    # total_bytes: 102400 / 51200 abs_floor = 2 noise-bands cleared (huge raw magnitude).
+    bytes_br = regression.flag(
+        RunDelta(
+            url_key=f"{BASE}/bytes",
+            metric="total_bytes",
+            current=204800,
+            previous=102400,
+            delta_abs=102400,
+            delta_pct=100.0,
+            direction=DirectionStatus.REGRESSION,
+        )
+    )
+    assert cls_br.flagged and bytes_br.flagged
+
+    # Raw-magnitude ranking would put total_bytes first; normalized ranking flips it.
+    assert abs(bytes_br.delta.delta_abs) > abs(cls_br.delta.delta_abs)
+    assert _band_multiple(cls_br) > _band_multiple(bytes_br)
+    ranked = sorted([bytes_br, cls_br], key=_band_multiple, reverse=True)
+    assert ranked[0] is cls_br

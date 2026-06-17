@@ -52,6 +52,7 @@ from perfcrawl.constants import (
     DEFAULT_MIN_DELAY_S,
     DEFAULT_SAMPLES_N,
     INP_PROXY_DISPLAY_LABEL,
+    METRIC_BAND,
     OPENAI_API_KEY_ENV,
     OPENROUTER_API_KEY_ENV,
     PERFCRAWL_PASSWORD_ENV,
@@ -521,6 +522,19 @@ def _compute_regression(conn, run_record) -> tuple[list[BandResult], bool]:
     return regression.flag_run(compute_deltas(run_record, previous)), True
 
 
+def _band_multiple(br: BandResult) -> float:
+    """Normalized offender magnitude: how many abs-floors the delta cleared (WR-02).
+
+    Cross-metric-comparable (a 0.05 CLS move and a 500ms LCP move become rankable
+    on the same scale) so small-unit regressions aren't truncated out of the top-N.
+    Ranking on raw ``abs(delta_abs)`` mixes units (bytes vs ms vs CLS vs score
+    points), so a large-unit metric always outranks a genuine small-unit regression.
+    """
+    abs_floor = METRIC_BAND.get(br.metric, (0.0, None))[0]
+    delta = abs(br.delta.delta_abs or 0.0)
+    return delta / abs_floor if abs_floor else delta
+
+
 def _render_regression_summary(
     band_results: list[BandResult], *, had_baseline: bool, target: str
 ) -> None:
@@ -529,8 +543,10 @@ def _render_regression_summary(
     INFORMATIONAL ONLY: this never raises typer.Exit (the exit code is independent of
     any flag — D-14). On a first run (no baseline) it prints a neutral note, NOT an
     error (D-04). Otherwise it shows counts of flagged regressions (▲ worse) vs
-    improvements (▼ better) and the top-N offenders by ``abs(delta_abs)`` magnitude.
-    Only FLAGGED BandResults appear — within-band movement is not surfaced.
+    improvements (▼ better) and the top-N offenders by NORMALIZED band-multiple
+    magnitude (``abs(delta_abs) / abs_floor`` — how many noise-bands each delta
+    cleared, comparable across units). Only FLAGGED BandResults appear — within-band
+    movement is not surfaced.
     """
     origin = _origin_of(target)
     if not had_baseline:
@@ -556,7 +572,7 @@ def _render_regression_summary(
     table.add_column("Δ", justify="right")
     table.add_column("", justify="center")
 
-    top = sorted(flagged, key=lambda br: abs(br.delta.delta_abs or 0.0), reverse=True)
+    top = sorted(flagged, key=_band_multiple, reverse=True)
     for br in top[:_REGRESSION_TOP_N]:
         if br.direction is DirectionStatus.REGRESSION:
             arrow = "[red]▲ worse[/red]"
