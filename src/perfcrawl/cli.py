@@ -73,6 +73,8 @@ from perfcrawl.orchestrator import (
     MeasurementError,
     UserError,
     _launch_chrome_with_cdp_port,
+    is_windows,
+    kill_chrome_tree,
     measure_url,
 )
 from perfcrawl.output import write_outputs
@@ -102,19 +104,14 @@ def _teardown_chrome(chrome, user_data_dir: Path) -> None:
 
     Reused by the crawl form-login resolution and the ``login`` subcommand so a
     short-lived login Chrome never leaks a zombie or a tempdir (T-02-03-Z).
+
+    CR-WIN: delegates the kill to ``kill_chrome_tree`` so Windows reaps Chrome's
+    whole process tree via ``taskkill /T`` (no orphaned GPU/renderer child holding
+    D3DCompiler_47.dll) while POSIX keeps the unchanged single-PID kill + reap.
     """
     import shutil
-    import subprocess as _sp
 
-    try:
-        chrome.kill()
-        try:
-            chrome.wait(timeout=5)
-        except _sp.TimeoutExpired:
-            # Already SIGKILL'd; the kernel will reap eventually.
-            pass
-    except Exception:
-        pass
+    kill_chrome_tree(chrome)
     shutil.rmtree(user_data_dir, ignore_errors=True)
 
 
@@ -1443,10 +1440,17 @@ def login(
         # Pitfall 5: kill + reap Chrome + rmtree the temp profile. For a headed
         # `uv run`-style re-exec, also process-group-kill so no orphaned Chrome
         # survives (spike requirement #4) — best-effort over the direct child.
-        try:
-            os.killpg(os.getpgid(chrome.pid), 15)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        # CR-WIN: os.killpg/os.getpgid are POSIX-only — on Windows they do not
+        # exist and raise AttributeError, which the except below does NOT catch,
+        # so the unguarded call propagated out of this finally, skipped
+        # _teardown_chrome, and crashed `login` before the session file was
+        # written. Guard the killpg behind ``not is_windows()``; on Windows the
+        # tree teardown in _teardown_chrome (taskkill /T) reaps the children.
+        if not is_windows():
+            try:
+                os.killpg(os.getpgid(chrome.pid), 15)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
         _teardown_chrome(chrome, user_data_dir)
 
     # Validate before writing so an empty/failed login does not persist a useless
