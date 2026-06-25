@@ -26,6 +26,7 @@ Security (RESEARCH § Security Domain):
   (T-02-03-PARTIAL).
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -40,6 +41,7 @@ from playwright.sync_api import sync_playwright
 from perfcrawl.aggregator import aggregate_page_samples
 from perfcrawl.constants import (
     DEVTOOLS_PORT_FILE_TIMEOUT_S,
+    DEVTOOLS_PORT_FILE_TIMEOUT_WINDOWS_S,
     DEVTOOLS_PORT_POLL_INTERVAL_S,
     PER_SAMPLE_TIMEOUT_S,
 )
@@ -50,7 +52,77 @@ from perfcrawl.normalizer import normalize_lh
 # Re-export MeasurementError so 02-04 CLI can `from perfcrawl.orchestrator import …`
 # in a single statement. The exception is defined in lighthouse_worker.py to avoid
 # a circular import (worker.preflight needs to raise it; orchestrator imports both).
-__all__ = ["measure_url", "MeasurementError", "UserError"]
+__all__ = ["measure_url", "MeasurementError", "UserError", "kill_chrome_tree", "is_windows"]
+
+
+def is_windows() -> bool:
+    """True on Windows (``os.name == "nt"``).
+
+    Factored into a single seam so every cross-platform branch (the Windows
+    process-tree kill, the GPU disable, the longer launch timeout, the POSIX-only
+    ``start_new_session`` / ``killpg`` guards) shares ONE platform check. Tests
+    mock THIS rather than ``os.name`` directly — patching ``os.name`` globally
+    breaks ``pathlib``'s ``WindowsPath`` instantiation on a POSIX host.
+    """
+    return os.name == "nt"
+
+
+def kill_chrome_tree(proc: subprocess.Popen) -> None:
+    """Terminate Chrome AND its child-process tree, then reap — cross-platform.
+
+    CR-WIN (windows-chrome-launch root cause): the previous teardown called
+    ``proc.kill()`` (a single-PID signal). On POSIX that is fine — macOS/Linux
+    clean up Chrome's children when the parent exits — so the POSIX path here is
+    **byte-for-byte the old behavior**. On Windows, however, ``Popen.kill()`` is
+    ``TerminateProcess`` on the parent PID *only*; Chrome's GPU/renderer/utility
+    children (spawned by ``--headless=new``) survive as orphans, and the orphaned
+    GPU process keeps ``D3DCompiler_47.dll`` mapped. A later ``playwright install
+    chromium`` then fails with EBUSY/EPERM on that locked DLL, leaving the chromium
+    install corrupt and every subsequent DevToolsActivePort launch timing out
+    (the reported self-reinforcing loop).
+
+    Windows fix: ``taskkill /F /T /PID <pid>`` — ``/T`` walks and kills the whole
+    process tree by PID, ``/F`` forces it — so no GPU/renderer child is orphaned.
+    If ``taskkill`` is somehow unavailable, fall back to ``proc.kill()`` so at
+    least the parent dies.
+
+    Always followed by ``proc.wait(timeout=5)`` (CR-02) so the parent's exit
+    status is reaped instead of lingering as a ``<defunct>`` zombie. Every step is
+    exception-guarded: a teardown failure must never mask the original error that
+    led here.
+    """
+    if is_windows():
+        # Windows: kill the whole tree (parent + GPU/renderer/utility children).
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            # taskkill missing/blocked: fall back to a single-PID terminate so the
+            # parent at least dies (children may still orphan — best effort).
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    else:
+        # POSIX: unchanged existing behavior — single-PID kill. (The `login`
+        # teardown keeps its own POSIX-only killpg for the `uv run` re-exec case;
+        # this helper does not add killpg so the audit path stays identical.)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    # CR-02: reap the parent's exit status so it never becomes a <defunct> zombie.
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        # Already force-killed; the kernel will reap eventually.
+        pass
+    except Exception:
+        pass
 
 
 class UserError(Exception):
@@ -116,30 +188,61 @@ def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.P
         # login` so the user can complete an interactive SSO/MFA login by hand.
         if headless:
             argv.insert(3, "--headless=new")
+            # CR-WIN (windows-chrome-launch): on Windows the `--headless=new` GPU
+            # path loads ``D3DCompiler_47.dll`` (the Direct3D shader compiler) —
+            # both the slow part of a Windows cold launch AND the exact DLL an
+            # orphaned GPU process keeps mapped (blocking `playwright install
+            # chromium` with EBUSY/EPERM). Disabling the GPU for the headless audit
+            # launch on Windows removes that whole code path. Guarded by
+            # is_windows() so POSIX headless launches are byte-for-byte unchanged.
+            if is_windows():
+                argv.append("--disable-gpu")
+
+        # CR-WIN diagnosability: send Chrome's stderr to a file in the per-run
+        # tempdir instead of DEVNULL so a launch crash (otherwise surfacing only as
+        # the opaque DevToolsActivePort timeout) reveals WHY Chrome died. The file
+        # lives inside ``user_data_dir`` so the existing rmtree cleans it up. We
+        # close our own handle right after Popen — the child dup'd the fd, so Chrome
+        # keeps writing and the fd is released the moment Chrome exits.
+        stderr_path = user_data_dir / "chrome-stderr.log"
+        stderr_fh = stderr_path.open("wb")
+
+        popen_kwargs: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": stderr_fh,
+        }
         # WR-04-06 (UAT test-6 root cause): launch Chrome as its OWN session and
         # process-group leader. The `perfcrawl login` teardown's
-        # `os.killpg(os.getpgid(chrome.pid), 15)` (cli.py ~804) reaps any orphaned
-        # headed Chrome + its renderer children under a `uv run` re-exec. Without
+        # `os.killpg(os.getpgid(chrome.pid), 15)` reaps any orphaned headed Chrome +
+        # its renderer children under a `uv run` re-exec. Without
         # `start_new_session=True` Chrome shares perfcrawl's process group, so that
-        # killpg SIGTERMs perfcrawl ITSELF — after `ctx.storage_state()` captured
-        # the session but BEFORE `validate_storage_state()` + the owner-only file
-        # write (cli.py:811-833) — and the command exits silently with no --out
-        # file. Making Chrome its own group leader confines the killpg to Chrome's
-        # group only. The two other callers tear down via `chrome.kill()` (a direct
-        # PID signal), which is unaffected by the new process group: the headless
-        # audit launch (measure_url) and the crawl driven-login launch (cli.py:131)
-        # both remain correct.
-        proc = subprocess.Popen(
-            argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        # killpg SIGTERMs perfcrawl ITSELF.
+        # CR-WIN: `start_new_session` is POSIX-only (it calls ``setsid``); on Windows
+        # it is a silent no-op, and the Windows teardown reaps the child tree via
+        # ``taskkill /T`` (kill_chrome_tree) instead of a process group. Guard it
+        # behind is_windows() so the Windows path is explicit, not accidental, and
+        # the POSIX audit/login behavior stays identical.
+        if not is_windows():
+            popen_kwargs["start_new_session"] = True
+        try:
+            proc = subprocess.Popen(argv, **popen_kwargs)
+        finally:
+            # Popen dup'd the fd into the child; drop our handle so only Chrome
+            # holds it. Closing here is safe whether Popen succeeded or raised.
+            stderr_fh.close()
     except Exception:
         # Cleanup-on-raise: same disk-leak class as CR-03, same rmtree pattern.
         shutil.rmtree(user_data_dir, ignore_errors=True)
         raise
 
+    # CR-WIN: a Windows cold launch (Defender scanning the ~180MB binary on first
+    # exec) needs a longer budget than the POSIX 5.0s. Select by os.name; POSIX is
+    # unchanged.
+    timeout_s = (
+        DEVTOOLS_PORT_FILE_TIMEOUT_WINDOWS_S
+        if is_windows()
+        else DEVTOOLS_PORT_FILE_TIMEOUT_S
+    )
     port_file = user_data_dir / "DevToolsActivePort"
     # WR-05: monotonic-deadline loop. Two improvements over the prior
     # ``for _ in range(int(timeout/interval)):`` shape:
@@ -150,7 +253,7 @@ def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.P
     #      0.15s interval (33.33 attempts) into 33 — fewer than the timeout
     #      implies. The deadline is monotonic-clock based and honors the
     #      full budget exactly.
-    deadline = time.monotonic() + DEVTOOLS_PORT_FILE_TIMEOUT_S
+    deadline = time.monotonic() + timeout_s
     while True:
         if port_file.exists():
             text = port_file.read_text().strip()
@@ -167,21 +270,27 @@ def _launch_chrome_with_cdp_port(*, headless: bool = True) -> tuple[subprocess.P
             break
         time.sleep(DEVTOOLS_PORT_POLL_INTERVAL_S)
 
-    # Timeout: never wrote the file. CR-02 + CR-03: kill Chrome, wait to reap
-    # so it never becomes a <defunct> zombie, then remove the user_data_dir
-    # tempdir BEFORE raising. The caller's `chrome, port, user_data_dir = ...`
-    # assignment never completes when we raise, so the caller's finally cannot
-    # clean up — this launcher must be self-contained on its failure path.
-    proc.kill()
+    # Timeout: never wrote the file. CR-02 + CR-03 + CR-WIN: kill Chrome's whole
+    # process tree (so Windows leaves no orphaned GPU/renderer child holding
+    # D3DCompiler_47.dll), reap it so it never becomes a <defunct> zombie, read
+    # Chrome's stderr for diagnosability, then remove the user_data_dir tempdir
+    # BEFORE raising. The caller's `chrome, port, user_data_dir = ...` assignment
+    # never completes when we raise, so the caller's finally cannot clean up —
+    # this launcher must be self-contained on its failure path.
+    kill_chrome_tree(proc)
+    # CR-WIN diagnosability: surface the tail of Chrome's stderr so the failure
+    # message says WHY Chrome died, not just that the port file never appeared.
+    chrome_stderr = ""
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        # Already SIGKILL'd; the kernel will reap eventually.
+        chrome_stderr = stderr_path.read_text(errors="replace").strip()
+    except OSError:
         pass
     shutil.rmtree(user_data_dir, ignore_errors=True)
-    raise MeasurementError(
-        f"Chrome did not write DevToolsActivePort within {DEVTOOLS_PORT_FILE_TIMEOUT_S}s"
-    )
+    msg = f"Chrome did not write DevToolsActivePort within {timeout_s}s"
+    if chrome_stderr:
+        # Bound the tail so a chatty Chrome can't produce a multi-MB exception.
+        msg += f"\nChrome stderr (tail):\n{chrome_stderr[-2000:]}"
+    raise MeasurementError(msg)
 
 
 def measure_url(
@@ -420,19 +529,12 @@ def measure_url(
             )
             return run_record, raw_artifacts
     finally:
-        # T-02-03-Z: kill Chrome + reap the exit status + rmtree the
-        # user_data_dir on BOTH success and failure paths. CR-02: without
-        # the wait() the killed Chromium stays a <defunct> zombie in the
-        # process table until the Python interpreter exits.
-        # ignore_errors=True on rmtree so a partial-cleanup failure doesn't
-        # mask the original exception.
-        try:
-            chrome.kill()
-            try:
-                chrome.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                # Already SIGKILL'd; the kernel will reap eventually.
-                pass
-        except Exception:
-            pass
+        # T-02-03-Z + CR-WIN: kill Chrome's whole process tree + reap the exit
+        # status + rmtree the user_data_dir on BOTH success and failure paths.
+        # kill_chrome_tree uses taskkill /T on Windows (so no GPU/renderer child
+        # orphans to lock D3DCompiler_47.dll) and the unchanged single-PID kill on
+        # POSIX, always followed by wait() (CR-02: no <defunct> zombie).
+        # ignore_errors=True on rmtree so a partial-cleanup failure doesn't mask
+        # the original exception.
+        kill_chrome_tree(chrome)
         shutil.rmtree(user_data_dir, ignore_errors=True)

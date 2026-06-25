@@ -886,3 +886,221 @@ def test_measure_url_skips_bad_url_value_origins_entries(monkeypatch):
     assert browser.replay.get("evaluate") == [["good", "1"]]
     # Both replay pages were closed — the bad-URL page is NOT leaked.
     assert browser.replay.get("closes") == 2
+
+
+# ---------------------------------------------------------------------------
+# CR-WIN (windows-chrome-launch): cross-platform Chrome lifecycle. The bug
+# cannot be reproduced live (dev is macOS), so these exercise the platform
+# branches directly by monkeypatching the ``orch.is_windows()`` seam and mocking
+# the kill path. Each pins the POSIX path is byte-for-byte unchanged AND the Windows
+# path reaps the whole process tree / takes the right launch branch.
+# ---------------------------------------------------------------------------
+
+
+class _PidProc:
+    """A Popen stand-in that has a ``pid`` (taskkill needs it) and records
+    kill()/wait() so a test can assert which teardown branch ran."""
+
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+        self.killed = False
+        self.waited = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.waited = True
+        return 0
+
+
+def test_kill_chrome_tree_posix_single_pid_unchanged(monkeypatch):
+    """CR-WIN: on POSIX, kill_chrome_tree keeps the unchanged single-PID kill +
+    reap and never shells out to taskkill (POSIX behavior is byte-for-byte the old
+    path)."""
+    import perfcrawl.orchestrator as orch
+
+    monkeypatch.setattr(orch, "is_windows", lambda: False)
+    run_calls = {"n": 0}
+    monkeypatch.setattr(
+        orch.subprocess, "run", lambda *a, **k: run_calls.__setitem__("n", run_calls["n"] + 1)
+    )
+
+    proc = _PidProc()
+    orch.kill_chrome_tree(proc)
+
+    assert proc.killed is True, "POSIX path must call proc.kill() (single PID)"
+    assert proc.waited is True, "CR-02: must reap with wait()"
+    assert run_calls["n"] == 0, "POSIX must NOT shell out to taskkill"
+
+
+def test_kill_chrome_tree_windows_taskkill_tree(monkeypatch):
+    """CR-WIN: on Windows, kill_chrome_tree force-kills the WHOLE pid tree via
+    ``taskkill /F /T /PID <pid>`` so GPU/renderer children never orphan (the root
+    cause of the locked D3DCompiler_47.dll), then reaps."""
+    import perfcrawl.orchestrator as orch
+
+    monkeypatch.setattr(orch, "is_windows", lambda: True)
+    captured = {}
+
+    def _fake_run(argv, **kw):
+        captured["argv"] = argv
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(orch.subprocess, "run", _fake_run)
+
+    proc = _PidProc(pid=4242)
+    orch.kill_chrome_tree(proc)
+
+    assert captured["argv"] == ["taskkill", "/F", "/T", "/PID", "4242"]
+    assert proc.killed is False, "Windows must use taskkill /T, not single-PID kill"
+    assert proc.waited is True, "CR-02: must still reap the parent"
+
+
+def test_kill_chrome_tree_windows_falls_back_when_taskkill_missing(monkeypatch):
+    """CR-WIN: if taskkill is unavailable, fall back to a single-PID kill so the
+    parent at least dies, and still reap."""
+    import perfcrawl.orchestrator as orch
+
+    monkeypatch.setattr(orch, "is_windows", lambda: True)
+
+    def _raise_run(*a, **k):
+        raise FileNotFoundError("taskkill not found")
+
+    monkeypatch.setattr(orch.subprocess, "run", _raise_run)
+
+    proc = _PidProc()
+    orch.kill_chrome_tree(proc)
+
+    assert proc.killed is True, "fallback must call proc.kill() when taskkill is missing"
+    assert proc.waited is True
+
+
+def _run_launcher_capturing(monkeypatch, tmp_path, *, os_name: str, headless: bool = True):
+    """Run the REAL ``_launch_chrome_with_cdp_port`` with a pre-written port file
+    (so it returns success immediately, no kill path) under a chosen ``os.name``,
+    capturing the argv + kwargs handed to ``subprocess.Popen``."""
+    import perfcrawl.orchestrator as orch
+
+    user_data_dir = tmp_path / f"chrome-{os_name}"
+    user_data_dir.mkdir()
+    # Port file present at t=0 → launcher returns without polling/kill.
+    (user_data_dir / "DevToolsActivePort").write_text("13579\n/devtools/browser/x")
+
+    captured: dict = {}
+    fake_proc = _FakeChromeProc()
+
+    def _popen(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return fake_proc
+
+    monkeypatch.setattr(orch.subprocess, "Popen", _popen)
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+    fake_browser = _FakeBrowser()
+    monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
+    monkeypatch.setattr(orch, "is_windows", lambda: os_name == "nt")
+
+    orch._launch_chrome_with_cdp_port(headless=headless)
+    return captured
+
+
+def test_launcher_disables_gpu_on_windows_headless(monkeypatch, tmp_path):
+    """CR-WIN: a headless Windows launch passes ``--disable-gpu`` to take the
+    D3DCompiler_47.dll GPU path out of the picture (both the slow part of a cold
+    launch and the locked-DLL source)."""
+    captured = _run_launcher_capturing(monkeypatch, tmp_path, os_name="nt", headless=True)
+    assert "--headless=new" in captured["argv"]
+    assert "--disable-gpu" in captured["argv"]
+
+
+def test_launcher_no_disable_gpu_on_posix_headless(monkeypatch, tmp_path):
+    """CR-WIN: POSIX headless launch is unchanged — no ``--disable-gpu``."""
+    captured = _run_launcher_capturing(monkeypatch, tmp_path, os_name="posix", headless=True)
+    assert "--headless=new" in captured["argv"]
+    assert "--disable-gpu" not in captured["argv"]
+
+
+def test_launcher_omits_start_new_session_on_windows(monkeypatch, tmp_path):
+    """CR-WIN: ``start_new_session`` (setsid) is POSIX-only — it must NOT be passed
+    to Popen on Windows (where the tree is reaped via taskkill instead)."""
+    captured = _run_launcher_capturing(monkeypatch, tmp_path, os_name="nt")
+    assert "start_new_session" not in captured["kwargs"]
+
+
+def test_launcher_keeps_start_new_session_on_posix(monkeypatch, tmp_path):
+    """CR-WIN: POSIX launch still makes Chrome its own session leader (WR-04-06)."""
+    captured = _run_launcher_capturing(monkeypatch, tmp_path, os_name="posix")
+    assert captured["kwargs"].get("start_new_session") is True
+
+
+def test_launcher_uses_longer_windows_timeout_in_error(monkeypatch, tmp_path):
+    """CR-WIN: the Windows DevToolsActivePort budget is the longer Windows constant,
+    and that value is surfaced in the timeout MeasurementError message."""
+    import perfcrawl.orchestrator as orch
+    from perfcrawl.constants import DEVTOOLS_PORT_FILE_TIMEOUT_WINDOWS_S
+
+    user_data_dir = tmp_path / "chrome-win-timeout"
+    user_data_dir.mkdir()
+    fake_proc = _PidProc()
+
+    monkeypatch.setattr(orch.subprocess, "Popen", lambda *a, **k: fake_proc)
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+    fake_browser = _FakeBrowser()
+    monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
+    monkeypatch.setattr(orch, "is_windows", lambda: True)
+    # Windows teardown shells out to taskkill — make it a no-op for the test.
+    monkeypatch.setattr(orch.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(orch.time, "sleep", lambda _s: None)
+
+    tick = {"n": 0}
+
+    def _mono():
+        tick["n"] += 1
+        return 0.0 if tick["n"] == 1 else 999.0
+
+    monkeypatch.setattr(orch.time, "monotonic", _mono)
+
+    with pytest.raises(orch.MeasurementError) as exc:
+        orch._launch_chrome_with_cdp_port()
+
+    assert str(DEVTOOLS_PORT_FILE_TIMEOUT_WINDOWS_S) in str(exc.value), (
+        "Windows timeout path must report the longer Windows budget, not the 5.0s POSIX one"
+    )
+    assert not user_data_dir.exists(), "launcher must self-clean the tempdir on timeout"
+
+
+def test_launcher_surfaces_chrome_stderr_on_timeout(monkeypatch, tmp_path):
+    """CR-WIN diagnosability: Chrome's stderr tail is appended to the timeout
+    MeasurementError so the failure says WHY Chrome died (vs. the opaque port
+    timeout that hid every Windows launch crash)."""
+    import perfcrawl.orchestrator as orch
+
+    user_data_dir = tmp_path / "chrome-stderr-surface"
+    user_data_dir.mkdir()
+    fake_proc = _PidProc()
+
+    def _popen_writes_stderr(argv, **kwargs):
+        # Chrome would write its crash reason to the stderr fd it was handed.
+        kwargs["stderr"].write(b"FATAL:gpu_init failed: D3DCompiler_47.dll error\n")
+        return fake_proc
+
+    monkeypatch.setattr(orch.subprocess, "Popen", _popen_writes_stderr)
+    monkeypatch.setattr(orch.tempfile, "mkdtemp", lambda prefix=None: str(user_data_dir))
+    fake_browser = _FakeBrowser()
+    monkeypatch.setattr(orch, "sync_playwright", lambda: _FakePlaywrightCM(fake_browser))
+    monkeypatch.setattr(orch.time, "sleep", lambda _s: None)
+
+    tick = {"n": 0}
+
+    def _mono():
+        tick["n"] += 1
+        return 0.0 if tick["n"] == 1 else 999.0
+
+    monkeypatch.setattr(orch.time, "monotonic", _mono)
+
+    with pytest.raises(orch.MeasurementError) as exc:
+        orch._launch_chrome_with_cdp_port()
+
+    assert "D3DCompiler_47.dll" in str(exc.value), "Chrome's stderr reason must surface"
+    assert "Chrome stderr" in str(exc.value)

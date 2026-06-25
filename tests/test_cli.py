@@ -466,9 +466,13 @@ def test_login_escape_hatch_writes_session_and_parent_survives_killpg(
     # leader → the killpg is isolated and the file IS written + validates.
     import perfcrawl.orchestrator as _orch
 
-    _launcher_uses_new_session = "start_new_session=True" in inspect.getsource(
-        _orch._launch_chrome_with_cdp_port
-    )
+    _src = inspect.getsource(_orch._launch_chrome_with_cdp_port)
+    # CR-WIN: the launcher now applies ``start_new_session`` only under a
+    # ``not is_windows()`` guard (Windows reaps the tree via taskkill instead), so
+    # the literal ``start_new_session=True`` no longer appears verbatim. The
+    # launcher only ever sets it on the POSIX branch, and this test runs on POSIX,
+    # so its mere presence in the source means Chrome gets its own session here.
+    _launcher_uses_new_session = "start_new_session" in _src
 
     def fake_launch(headless: bool = True):  # noqa: ARG001 — signature parity
         # Spawn a real long-sleeping child EXACTLY the way the real launcher does
@@ -519,6 +523,59 @@ def test_login_escape_hatch_writes_session_and_parent_survives_killpg(
     assert spawned, "fake_launch was never invoked — login() did not launch Chrome"
     child = spawned[0]
     assert child.poll() is not None, "stand-in Chrome child survived the teardown killpg"
+
+
+def test_login_on_windows_skips_killpg_and_writes_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CR-WIN (windows-chrome-launch): on Windows, login()'s finally must NOT call
+    ``os.killpg(os.getpgid(...))`` — those are POSIX-only and raise AttributeError
+    on Windows, which the finally's ``except`` does NOT catch, so before the guard
+    the call propagated, skipped ``_teardown_chrome``, and crashed login BEFORE the
+    session file was written. With ``os.name`` forced to ``"nt"`` the killpg branch
+    is skipped, ``_teardown_chrome`` (taskkill /T, falling back to a single-PID kill
+    where taskkill is unavailable) reaps Chrome, and the --out file IS written.
+    """
+    out = tmp_path / "session.authstate.json"
+    spawned: list = []
+
+    def fake_launch(headless: bool = True):  # noqa: ARG001 — signature parity
+        # On Windows the real launcher does NOT pass start_new_session; mirror that.
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        spawned.append(child)
+        user_data_dir = tmp_path / "chrome-user-data"
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        return child, 0, user_data_dir
+
+    # Force the Windows code path via the is_windows() seam (patching os.name
+    # globally would break pathlib's WindowsPath on this POSIX host). cli.py's
+    # killpg guard reads cli.is_windows; the teardown's tree-kill reads
+    # orchestrator.is_windows — patch both so the whole Windows path runs.
+    monkeypatch.setattr("perfcrawl.cli.is_windows", lambda: True)
+    monkeypatch.setattr("perfcrawl.orchestrator.is_windows", lambda: True)
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", _fake_sync_playwright)
+    monkeypatch.setattr("perfcrawl.cli._launch_chrome_with_cdp_port", fake_launch)
+
+    result = runner.invoke(
+        app, ["login", "https://example.com/login/", "--out", str(out)], input="\n"
+    )
+
+    # The command must complete cleanly — no uncaught AttributeError from killpg.
+    assert result.exit_code == ExitCode.SUCCESS, (
+        f"login crashed on the Windows path: exit={result.exit_code} "
+        f"exc={result.exception!r}"
+    )
+    # The session file was written + validates (proving teardown did not abort).
+    assert out.exists(), "--out session file was not written on the Windows path"
+    validate_storage_state(json.loads(out.read_text()))
+    # Chrome was reaped by _teardown_chrome (taskkill missing on the dev host →
+    # fallback single-PID kill), so the stand-in child is no longer running.
+    assert spawned, "fake_launch was never invoked"
+    assert spawned[0].poll() is not None, "stand-in Chrome survived the Windows teardown"
 
 
 def test_login_rejects_url_with_embedded_credentials(

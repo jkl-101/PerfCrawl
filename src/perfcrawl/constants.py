@@ -63,6 +63,15 @@ INP_PROXY_DISPLAY_LABEL: str = "INP (lab proxy, TBT-based)"
 DEVTOOLS_PORT_FILE_TIMEOUT_S: float = 5.0
 DEVTOOLS_PORT_POLL_INTERVAL_S: float = 0.1
 
+# CR-WIN (windows-chrome-launch): a Windows cold launch is materially slower than
+# POSIX — Defender real-time protection scans the ~180MB chromium binary on its
+# first exec before Chrome can run, so the kernel-picked port can take well over
+# the 5.0s POSIX budget to land in DevToolsActivePort. Give the Windows path a
+# longer budget so a slow-but-healthy first launch is not misreported as a Chrome
+# failure. POSIX keeps the tight 5.0s budget unchanged. The orchestrator selects
+# between the two by ``os.name`` — this is the ONE editable place for both.
+DEVTOOLS_PORT_FILE_TIMEOUT_WINDOWS_S: float = 30.0
+
 # --- D-12 + MEDIUM-4 (plan-check) carve-out: audits kept regardless of score ---
 # The default ``diagnostics`` filter drops any audit with ``score >= 1`` (passing
 # audits and meta audits) per D-12 — keeps the persisted JSON bounded. But the
