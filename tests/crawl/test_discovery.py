@@ -88,9 +88,7 @@ def test_depth_is_tracked_and_seed_is_zero(local_server, client):
     by_url = {r.url: r.depth for r in in_scope}
     seed_depth = next(d for u, d in by_url.items() if u.endswith("/index.html"))
     assert seed_depth == 0
-    about_depth = next(
-        (d for u, d in by_url.items() if u.endswith("/about.html")), None
-    )
+    about_depth = next((d for u, d in by_url.items() if u.endswith("/about.html")), None)
     assert about_depth == 1
 
 
@@ -236,6 +234,41 @@ def test_login_url_excluded():
     found = {r.url for r in in_scope}
     assert not any("/accounts/login/" in u for u in found)
     assert any(u.endswith("/dashboard/") for u in found)
+
+
+def test_seed_traversed_but_not_pruned_by_include():
+    """CRAWL-05 regression: --include must not prune the seed from the frontier.
+
+    The exact real-world repro: seed the homepage with ``--include '*/dashboard/*'``.
+    The homepage does NOT match the include, but it links to a /dashboard/ page that
+    does (and a /blog/ page that does not). Before the seed free-pass fix this failed
+    with "0 discovered" because passes_filters dropped the seed at frontier admission,
+    so its links were never followed. After the fix:
+
+      - /dashboard/ IS in the measured (in-scope) set,
+      - the seed / is traversed for discovery but NOT measured (doesn't match),
+      - /blog/ is NOT measured (doesn't match, filtered at child admission),
+      - the in-scope list is NON-empty.
+    """
+    seed = "https://www.studyhalo.com/"
+    pages = {
+        "/": '<a href="/dashboard/">Dash</a> <a href="/blog/">Blog</a>',
+        "/dashboard/": "<p>dashboard</p>",
+        "/blog/": "<p>blog</p>",
+    }
+    cfg = CrawlConfig(use_sitemap=False, includes=["*/dashboard/*"], max_depth=2)
+    in_scope, _ = discover(
+        seed, cfg=cfg, robots=_allow_all(), fetch=_graph_fetch(pages), sleep=lambda _s: None
+    )
+    found = {r.url for r in in_scope}
+    # the include-matching descendant is discovered + measured
+    assert any(u.endswith("/dashboard/") for u in found)
+    # the seed (homepage) is traversed but NOT measured (it doesn't match the include)
+    assert seed not in found
+    # the non-matching sibling is neither traversed-into-measure nor measured
+    assert not any(u.endswith("/blog/") for u in found)
+    # the measured set is non-empty (no more "0 discovered")
+    assert in_scope
 
 
 def test_existing_admission_unchanged_for_benign_links(local_server, client):

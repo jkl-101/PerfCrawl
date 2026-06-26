@@ -1304,6 +1304,16 @@ def crawl(
                 "tokens like 'admin'/'remove'/'archive'/'disable'). Narrow --deny "
                 "or seed a non-denied path if this crawl was intentional."
             )
+        # The seed is now always traversed for discovery even when it doesn't match
+        # --include, so a 0-measured result with includes set most likely means the
+        # include globs matched nothing reachable from the seed (over-narrowed).
+        if cfg.includes:
+            err_console.print(
+                "[yellow]hint:[/yellow] --include globs may have matched nothing "
+                "reachable from the seed (the seed is traversed for discovery but "
+                "only measured when it matches). Broaden --include or seed closer "
+                "to the pages you want measured."
+            )
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
 
     # --- D-02: AI analysis post-pass (only when --ai; runs AFTER measurement and

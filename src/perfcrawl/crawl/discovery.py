@@ -9,18 +9,28 @@ return them.
 The loop (Pattern 1):
 
   1. Seed the depth-0 frontier with the seed URL plus (when ``cfg.use_sitemap``)
-     the recursively-expanded ``/sitemap.xml`` + robots ``Sitemap:`` directives,
-     each gated through ``in_scope`` + ``passes_filters`` + the variant cap.
+     the recursively-expanded ``/sitemap.xml`` + robots ``Sitemap:`` directives.
+     The explicit seed is admitted to the frontier regardless of the
+     include/exclude filter (the seed-only free pass) so a homepage seed can be
+     traversed to reach a filtered subtree; it is gated through ``in_scope`` + the
+     denylist + login exclusion + robots + the variant cap. Sitemap-sourced seeds
+     keep the ``passes_filters`` admission gate.
   2. On every ``popleft``: **break** once ``len(in_scope) >= cfg.max_pages``
      (the D-05 enqueue bound — Pitfall 1: a trap can never explode past the cap);
      **skip** if robots disallows the URL (CRAWL-03).
   3. ``fetch(url)`` with redirect-following; a final status outside 2xx becomes a
      status-only error ``PageResult`` (D-03 — never measured) and the URL is
-     dropped; a 2xx becomes an ``InScope(url, depth)``.
+     dropped; a 2xx page is appended to the in-scope (MEASURED) set ONLY when it
+     passes the include/exclude filter — the filter is the MEASURE gate, applied
+     here, not at seed frontier admission. (A non-matching seed is therefore
+     traversed for discovery but not measured.)
   4. While ``depth < cfg.max_depth``, extract ``<a href>``, resolve each via
      ``urljoin`` + drop the fragment via ``urldefrag`` (Pitfall 6), and enqueue
      the candidate at ``depth+1`` iff its ``canonical_key`` is unseen AND it
      passes scope + filters + the per-base-path variant cap (D-06/D-08/D-14).
+     Children always keep the ``passes_filters`` admission gate, so ``--max-pages``
+     remains a traversal bound and a non-matching path trap is never fetched
+     unboundedly.
 
 Three independent termination bounds (Pattern 5, threat T-03-04) — max-depth,
 the max-pages enqueue bound, and the variant cap — together with the
@@ -148,14 +158,28 @@ def discover(
     # ever non-idempotent" hazard the surrounding comments warn against.
     login_key = canonical_key(cfg.login_url) if cfg.login_url else None
 
-    def _try_admit(url: str, depth: int) -> None:
+    def _try_admit(url: str, depth: int, *, ignore_filters: bool = False) -> None:
         """Gate + enqueue a candidate once (IN-05: ONE admission path for all).
 
-        The single key/seen → in_scope → passes_filters → robots → variant-cap →
-        seen.add → frontier.append sequence, shared by the depth-0 seed/sitemap
-        loop and the depth>0 child loop so the gating is defined exactly once and
-        cannot drift between the two (the hazard that made the WR-06 robots gate
-        need touching in two places).
+        The single key/seen → in_scope → [passes_filters] → denylist → login-excl
+        → robots → variant-cap → seen.add → frontier.append sequence, shared by
+        the depth-0 seed/sitemap loop and the depth>0 child loop so the gating is
+        defined exactly once and cannot drift between the two (the hazard that made
+        the WR-06 robots gate need touching in two places).
+
+        ``ignore_filters`` (the seed-only free pass): when True, SKIP ONLY the
+        include/exclude ``passes_filters`` check so the explicit user-provided seed
+        is always admitted to the frontier for link discovery. Every other gate —
+        scope, the D-05 denylist, AUTH-04 login exclusion, WR-06 robots, and the
+        per-base-path variant cap — still applies, so the seed cannot bypass any
+        termination/security bound; it only bypasses the MEASURE filter. The filter
+        is re-applied at the in-scope append point below, which is what excludes a
+        non-matching seed (e.g. a homepage that doesn't match ``--include``) from
+        the measured set while still letting its links be discovered. Children are
+        always passed ``ignore_filters=False`` so the filter keeps gating frontier
+        admission for them (a non-matching child is neither traversed nor measured,
+        exactly as before) — this preserves ``--max-pages`` as a traversal bound and
+        keeps a non-matching path trap from being fetched unboundedly.
 
         WR-06: a robots-Disallow'd candidate is dropped here, BEFORE it consumes a
         per-base-path variant-cap slot (CRAWL-03 intent). A sitemap commonly
@@ -168,7 +192,9 @@ def discover(
             return
         if not in_scope(url, seed, include_subdomains=cfg.include_subdomains):
             return
-        if not passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
+        if not ignore_filters and not passes_filters(
+            url, includes=cfg.includes, excludes=cfg.excludes
+        ):
             return
         # D-05 / T-04-04: always-on destructive-link denylist. Placed EARLY (before
         # robots and the variant cap) so a denied URL never consumes a per-base-path
@@ -194,7 +220,13 @@ def discover(
         frontier.append((url, key, depth))
 
     # --- depth-0 seeds: the seed itself + (optional) sitemap-sourced URLs ---
-    _try_admit(seed, 0)
+    # The explicit user-provided seed gets the include/exclude free pass
+    # (ignore_filters=True) so "seed the homepage, measure only the /dashboard/
+    # subtree" traverses via the seed instead of failing "0 discovered". It is
+    # measured only if it ALSO matches the filter (re-checked at the in-scope
+    # append below). Sitemap-sourced seeds keep the filter — only the explicit
+    # seed gets the traversal free pass.
+    _try_admit(seed, 0, ignore_filters=True)
     if cfg.use_sitemap:
         for sm_url in _sitemap_seeds(seed, robots=robots, fetch=fetch):
             _try_admit(sm_url, 0)
@@ -227,8 +259,19 @@ def discover(
 
         # WR-02: carry the admit-time canonical key into the in-scope record so the
         # measurement pass reuses it instead of re-deriving it downstream.
-        in_scope_results.append(InScope(url=url, depth=depth, url_key=key))
+        # The include/exclude filter is the MEASURE gate: a page is appended to the
+        # measured set ONLY when it passes the filter. The seed gets a frontier free
+        # pass (ignore_filters=True above) so it is always traversed for discovery,
+        # but a non-matching seed (e.g. a homepage that doesn't match --include) is
+        # excluded here from the measured set. For non-seed children this re-check is
+        # redundant (they already cleared the same filter at admission); it is the
+        # seed where it does the real work.
+        if passes_filters(url, includes=cfg.includes, excludes=cfg.excludes):
+            in_scope_results.append(InScope(url=url, depth=depth, url_key=key))
         if depth < cfg.max_depth:  # CRAWL-04: don't expand past the depth bound
+            # Always traverse for discovery regardless of whether THIS page was
+            # measured — this is how a non-matching seed still yields its matching
+            # descendants. Children are gated by the filter at admission.
             html = getattr(resp, "text", "") or ""
             for href in _extract_links(html):
                 child = urldefrag(urljoin(url, href)).url  # Pitfall 6

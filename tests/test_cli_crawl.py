@@ -302,6 +302,34 @@ def test_denied_seed_emits_denylist_hint(monkeypatch, tmp_path: Path, local_serv
     assert "denylist" in result.stderr
 
 
+def test_include_matches_nothing_emits_include_hint(
+    monkeypatch, tmp_path: Path, local_server: str
+) -> None:
+    """CRAWL-05: an over-narrow ``--include`` that matches nothing reachable from the
+    seed yields 0 measured → MEASUREMENT_ERROR (2). The seed is still traversed for
+    discovery (no '0 discovered' crash), but because nothing matches, the CLI must
+    surface an ``--include``-specific hint so the user understands the empty result."""
+    calls = _patch_measure(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "crawl",
+            local_server + "/index.html",
+            "--include",
+            "*/no-such-section/*",
+            "--delay",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.MEASUREMENT_ERROR, result.stdout + result.stderr
+    # No page matched the include → nothing was measured.
+    assert calls == [], f"measure_url ran despite a no-match include: {calls}"
+    # The include hint must name --include so an over-narrowed glob is diagnosable.
+    assert "--include" in result.stderr
+
+
 def test_exit_one_on_empty_url(monkeypatch, tmp_path: Path) -> None:
     """An empty seed URL is a user error (1) before any measurement."""
     calls = _patch_measure(monkeypatch)
@@ -341,8 +369,16 @@ def test_crawl_has_auth_and_deny_flags() -> None:
     """``crawl --help`` exposes the new auth + deny flags (D-01/D-05)."""
     result = runner.invoke(app, ["crawl", "--help"])
     assert result.exit_code == 0
-    for flag in ("--login-url", "--user-sel", "--pass-sel", "--submit-sel",
-                 "--auth-state", "--deny", "--success-text", "--success-url"):
+    for flag in (
+        "--login-url",
+        "--user-sel",
+        "--pass-sel",
+        "--submit-sel",
+        "--auth-state",
+        "--deny",
+        "--success-text",
+        "--success-url",
+    ):
         assert flag in result.stdout, f"missing auth/deny flag: {flag}"
 
 
