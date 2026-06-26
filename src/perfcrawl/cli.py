@@ -408,6 +408,11 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     table.add_column("LCP (ms)", justify="right")
     table.add_column(INP_PROXY_DISPLAY_LABEL, justify="right")
     table.add_column("TTFB (ms)", justify="right")
+    table.add_column("Requests", justify="right")
+    table.add_column("Total bytes", justify="right")
+    # URL string, not a scalar — fold (like Page) so a long slowest-request URL
+    # never blows up terminal width; do NOT right-justify.
+    table.add_column("Slowest request", overflow="fold")
     table.add_column("Status", justify="right")
 
     measured = 0
@@ -421,23 +426,42 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
                 "-",
                 "-",
                 "-",
+                "-",
+                "-",
+                "-",
                 _format_scalar(page.status_code),
             )
         else:
             measured += 1
+            # Mirror the single-page table's slowest-request treatment exactly
+            # (cli.py _render_human_table): url + ms, or "-" when either is None.
+            if (
+                page.slowest_request_url is not None
+                and page.slowest_request_ms is not None
+            ):
+                slowest = f"{page.slowest_request_url} ({page.slowest_request_ms:.0f} ms)"
+            else:
+                slowest = "-"
             table.add_row(
                 _relativize_url(page.url, origin),
                 _format_scalar(page.perf_score),
                 _format_metric_sample(page.lcp_ms),
                 _format_metric_sample(page.inp_proxy_tbt_ms),
                 _format_metric_sample(page.ttfb_ms),
+                _format_scalar(page.request_count),
+                _format_scalar(page.total_bytes),
+                slowest,
                 _format_scalar(page.status_code),
             )
 
     table.caption = (
         f"{measured} measured · {errors} errors · (median of {samples}) · written to {run_dir}"
     )
-    out_console.print(table)
+    # Render on a console floored at _CRAWL_TABLE_MIN_WIDTH so the now-9-column table
+    # is not crushed on an 80-col (or non-tty captured) terminal; a wider real
+    # terminal keeps its own size. Writes to the current stdout like out_console.
+    table_console = Console(width=max(out_console.size.width, _CRAWL_TABLE_MIN_WIDTH))
+    table_console.print(table)
 
 
 # --- OUT-01 / D-05/D-06/D-07: the --output token contract ----------------------
@@ -454,6 +478,12 @@ _DEFAULT_OUTPUT: str = "csv,json,artifacts"
 
 # Cap on the regression-summary offenders list (D-13: counts + top-N by magnitude).
 _REGRESSION_TOP_N: int = 10
+
+# Minimum render width for the multi-page crawl table. With 9 columns (two of them
+# URL-bearing) the default 80-col terminal crushes headers and folds short values
+# mid-token; bump narrow/non-tty terminals up to this floor so every column header
+# and the per-page scalars stay legible (a real wider terminal keeps its own width).
+_CRAWL_TABLE_MIN_WIDTH: int = 160
 
 
 def _emit_err(message: str, scrub) -> None:

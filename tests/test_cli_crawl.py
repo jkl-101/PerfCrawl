@@ -51,6 +51,12 @@ def _canned_run(url: str, samples: int = 1, emulation: str = "mobile"):
         perf_score=90.0,
         lcp_ms=MetricSample(median=1200.0, samples=[1200.0]),
         status_code=200,
+        # Populate the network facts surfaced in the crawl table (260626-cv2) so
+        # the measured row carries real values instead of "-" placeholders.
+        request_count=18,
+        total_bytes=345_600,
+        slowest_request_url="https://example.com/static/main.js",
+        slowest_request_ms=420.0,
     )
     run = RunRecord(
         id=UUID("3f1c2b9a-0000-4000-8000-0000000000a1"),
@@ -571,6 +577,44 @@ def test_crawl_summary_table_shows_relative_paths(
     assert "/index.html" in result.stdout
     # ...and the full per-row URL (origin + path) is truncated away.
     assert f"{origin}/index.html" not in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# Network-fact columns in the crawl summary table (260626-cv2)
+#
+# The crawl table now surfaces request count, total bytes (page weight), and the
+# slowest request (URL + ms) per page — parity with the single-page measure table.
+# Both row branches (measured + error) must emit a cell per column or Rich raises.
+# --------------------------------------------------------------------------- #
+
+
+def test_crawl_summary_renders_network_fact_columns(capsys) -> None:
+    """_render_crawl_summary shows Requests / Total bytes / Slowest request and
+    renders real values on a measured row + "-" on an error row, with no Rich
+    cell/column mismatch (the call must not raise)."""
+    from perfcrawl.cli import _render_crawl_summary
+    from perfcrawl.crawl import is_error_row
+
+    origin = "https://example.com"
+    measured_run, _ = _canned_run(origin + "/index.html")
+    # An error row the production classifier treats as an error (all metrics null).
+    error_page = PageResult(url=origin + "/broken", url_key="example.com/broken")
+    assert is_error_row(error_page), "constructed page must classify as an error row"
+    measured_run.pages.append(error_page)
+
+    # Must not raise — proves cell/column parity for BOTH row branches.
+    _render_crawl_summary(measured_run, samples=1, run_dir=Path("/tmp/run"))
+    out = capsys.readouterr().out
+
+    # New column headers render.
+    assert "Requests" in out
+    assert "Total bytes" in out
+    assert "Slowest request" in out
+    # Measured row shows real values — assert on fragments that survive Rich's
+    # column wrapping (the numeric bytes + the slowest-request ms), not the long
+    # URL (which Rich may fold across lines).
+    assert "345600" in out
+    assert "420 ms" in out
 
 
 # --------------------------------------------------------------------------- #
