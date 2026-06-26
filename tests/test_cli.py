@@ -182,6 +182,102 @@ def test_measure_ai_requires_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 # --------------------------------------------------------------------------- #
+# AUTH-01: measure --auth-state (single-page authenticated audit)
+# --------------------------------------------------------------------------- #
+
+
+def _write_state(path: Path) -> Path:
+    """Write a valid (non-empty) Playwright storage_state JSON to ``path``."""
+    path.write_text(
+        json.dumps(
+            {
+                "cookies": [{"name": "sid", "value": "x", "domain": "example.com", "path": "/"}],
+                "origins": [],
+            }
+        )
+    )
+    return path
+
+
+def test_measure_help_lists_auth_state() -> None:
+    """``measure --help`` lists ``--auth-state`` (AUTH-01 single-page replay)."""
+    result = runner.invoke(app, ["measure", "--help"])
+    assert result.exit_code == 0
+    assert "--auth-state" in result.stdout
+
+
+def test_measure_help_omits_form_login_flags() -> None:
+    """Form login stays crawl-only — ``measure`` exposes no ``--login-url`` etc."""
+    result = runner.invoke(app, ["measure", "--help"])
+    assert result.exit_code == 0
+    assert "--login-url" not in result.stdout
+    assert "--user-sel" not in result.stdout
+
+
+def test_measure_auth_state_forwards_resolved_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A valid ``--auth-state`` resolves + forwards the storage_state into measure_url."""
+    run = _make_stub_run()
+    calls = _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
+    state_path = _write_state(tmp_path / "state.json")
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--auth-state",
+            str(state_path),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    forwarded = kwargs["auth_state"]
+    assert forwarded is not None
+    assert forwarded["cookies"][0]["name"] == "sid"
+
+
+def test_measure_without_auth_state_forwards_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No ``--auth-state`` keeps the default path: ``measure_url(auth_state=None)``."""
+    run = _make_stub_run()
+    calls = _patch_measure(monkeypatch, return_value=(run, _make_stub_artifacts(run)))
+    result = runner.invoke(app, ["measure", "https://example.com", "--output-dir", str(tmp_path)])
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout + result.stderr
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs["auth_state"] is None
+
+
+def test_measure_bad_auth_state_exits_auth_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty/stale ``--auth-state`` exits AUTH_ERROR (3) WITHOUT measuring."""
+    calls = _patch_measure(monkeypatch)
+    # validate_storage_state raises AuthError on a state with no cookies + no origins.
+    state_path = tmp_path / "empty.json"
+    state_path.write_text(json.dumps({"cookies": [], "origins": []}))
+    result = runner.invoke(
+        app,
+        [
+            "measure",
+            "https://example.com",
+            "--auth-state",
+            str(state_path),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == ExitCode.AUTH_ERROR, result.stdout + result.stderr
+    assert calls == [], "measurement must never run when auth-state resolution fails"
+    assert "auth failed" in result.stderr or "auth failed" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
 # --json flag (D-06): stdout is parseable JSON; stderr carries progress.
 # --------------------------------------------------------------------------- #
 
@@ -566,8 +662,7 @@ def test_login_on_windows_skips_killpg_and_writes_session(
 
     # The command must complete cleanly — no uncaught AttributeError from killpg.
     assert result.exit_code == ExitCode.SUCCESS, (
-        f"login crashed on the Windows path: exit={result.exit_code} "
-        f"exc={result.exception!r}"
+        f"login crashed on the Windows path: exit={result.exit_code} exc={result.exception!r}"
     )
     # The session file was written + validates (proving teardown did not abort).
     assert out.exists(), "--out session file was not written on the Windows path"
