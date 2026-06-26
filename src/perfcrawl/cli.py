@@ -457,7 +457,11 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     table.caption = (
         f"{measured} measured · {errors} errors · (median of {samples}) · written to {run_dir}"
     )
-    out_console.print(table)
+    # Render on a console floored at _CRAWL_TABLE_MIN_WIDTH so the now-9-column table
+    # is not crushed on an 80-col (or non-tty captured) terminal; a wider real
+    # terminal keeps its own size. Writes to the current stdout like out_console.
+    table_console = Console(width=max(out_console.size.width, _CRAWL_TABLE_MIN_WIDTH))
+    table_console.print(table)
 
 
 # --- OUT-01 / D-05/D-06/D-07: the --output token contract ----------------------
@@ -474,6 +478,12 @@ _DEFAULT_OUTPUT: str = "csv,json,artifacts"
 
 # Cap on the regression-summary offenders list (D-13: counts + top-N by magnitude).
 _REGRESSION_TOP_N: int = 10
+
+# Minimum render width for the multi-page crawl table. With 9 columns (two of them
+# URL-bearing) the default 80-col terminal crushes headers and folds short values
+# mid-token; bump narrow/non-tty terminals up to this floor so every column header
+# and the per-page scalars stay legible (a real wider terminal keeps its own width).
+_CRAWL_TABLE_MIN_WIDTH: int = 160
 
 
 def _emit_err(message: str, scrub) -> None:
