@@ -408,6 +408,11 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
     table.add_column("LCP (ms)", justify="right")
     table.add_column(INP_PROXY_DISPLAY_LABEL, justify="right")
     table.add_column("TTFB (ms)", justify="right")
+    table.add_column("Requests", justify="right")
+    table.add_column("Total bytes", justify="right")
+    # URL string, not a scalar — fold (like Page) so a long slowest-request URL
+    # never blows up terminal width; do NOT right-justify.
+    table.add_column("Slowest request", overflow="fold")
     table.add_column("Status", justify="right")
 
     measured = 0
@@ -421,16 +426,31 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
                 "-",
                 "-",
                 "-",
+                "-",
+                "-",
+                "-",
                 _format_scalar(page.status_code),
             )
         else:
             measured += 1
+            # Mirror the single-page table's slowest-request treatment exactly
+            # (cli.py _render_human_table): url + ms, or "-" when either is None.
+            if (
+                page.slowest_request_url is not None
+                and page.slowest_request_ms is not None
+            ):
+                slowest = f"{page.slowest_request_url} ({page.slowest_request_ms:.0f} ms)"
+            else:
+                slowest = "-"
             table.add_row(
                 _relativize_url(page.url, origin),
                 _format_scalar(page.perf_score),
                 _format_metric_sample(page.lcp_ms),
                 _format_metric_sample(page.inp_proxy_tbt_ms),
                 _format_metric_sample(page.ttfb_ms),
+                _format_scalar(page.request_count),
+                _format_scalar(page.total_bytes),
+                slowest,
                 _format_scalar(page.status_code),
             )
 
