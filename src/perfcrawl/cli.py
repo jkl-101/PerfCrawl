@@ -184,9 +184,7 @@ def _run_ai_post_pass(
     """
     provider_name = resolve_provider(ai_provider, os.environ)
     cfg = PROVIDERS[provider_name]
-    provider = build_provider(
-        provider_name, os.environ[cfg["key_env"]], base_url=ai_base_url
-    )
+    provider = build_provider(provider_name, os.environ[cfg["key_env"]], base_url=ai_base_url)
     return analysis.analyze_run(
         run_record,
         provider=provider,
@@ -435,10 +433,7 @@ def _render_crawl_summary(run, *, samples: int, run_dir: Path) -> None:
             measured += 1
             # Mirror the single-page table's slowest-request treatment exactly
             # (cli.py _render_human_table): url + ms, or "-" when either is None.
-            if (
-                page.slowest_request_url is not None
-                and page.slowest_request_ms is not None
-            ):
+            if page.slowest_request_url is not None and page.slowest_request_ms is not None:
                 slowest = f"{page.slowest_request_url} ({page.slowest_request_ms:.0f} ms)"
             else:
                 slowest = "-"
@@ -541,9 +536,7 @@ def _compute_regression(conn, run_record) -> tuple[list[BandResult], bool]:
     returned for BOTH the Rich summary (D-13) and the Sheets delta columns (D-11).
     This NEVER raises typer.Exit on a flag — flags are informational only (D-14).
     """
-    previous = read_previous_run(
-        conn, run_record.target, run_record.started_at.isoformat()
-    )
+    previous = read_previous_run(conn, run_record.target, run_record.started_at.isoformat())
     if previous is None:
         return [], False
     return regression.flag_run(compute_deltas(run_record, previous)), True
@@ -724,6 +717,14 @@ def measure(
         help="Target Google Sheet — a bare key or a full URL (D-10). Required when "
         "'sheets' is in --output. Non-secret, so a flag is fine.",
     ),
+    auth_state: str = typer.Option(
+        None,
+        "--auth-state",
+        help="Path to a saved Playwright storage_state JSON (from `perfcrawl login`) "
+        "that replays an authenticated session so a single logged-in page can be "
+        "measured. No form login is driven here — only a saved state is replayed "
+        "(form login stays crawl-only).",
+    ),
 ) -> None:
     """Measure ``URL`` end-to-end: Chrome → LH → outputs → SQLite → stdout."""
     # --- OUT-01 / D-05/D-06/D-07: parse + validate --output at t=0, BEFORE any
@@ -794,9 +795,27 @@ def measure(
         else None
     )
 
+    # --- AUTH-01: replay a saved --auth-state for a single authenticated page.
+    # File-only / Chrome-free path (auth.resolve_auth_state reads + validates the
+    # storage_state JSON, raising AuthError on an unreadable/empty/stale file). An
+    # AuthError maps to ExitCode.AUTH_ERROR (3) — fail fast at t=0, BEFORE the
+    # measurement subprocess (mirrors crawl's AuthError mapping at the resolve step).
+    # NO form login is driven here; that stays crawl-only. The --auth-state path is
+    # non-secret, so scrub only when an AI/sheets run already seeded the scrubber.
+    resolved_auth_state: dict | None = None
+    if auth_state:
+        try:
+            resolved_auth_state = resolve_auth_state(auth_state_path=auth_state)
+        except AuthError as e:
+            msg = f"[red]auth failed:[/red] {e}"
+            err_console.print(scrub(msg) if scrub else msg)
+            raise typer.Exit(code=int(ExitCode.AUTH_ERROR)) from None
+
     # --- D-15 USER_ERROR arm (input validation, before any subprocess) ---
     try:
-        run_record, raw_artifacts = measure_url(url=url, samples=samples, emulation=emulation)
+        run_record, raw_artifacts = measure_url(
+            url=url, samples=samples, emulation=emulation, auth_state=resolved_auth_state
+        )
     except UserError as e:
         err_console.print(f"[red]error:[/red] {e}")
         raise typer.Exit(code=int(ExitCode.USER_ERROR)) from None
@@ -852,9 +871,7 @@ def measure(
     # --- OUT-02 / D-10: route to Google Sheets when 'sheets' selected (after the
     # AI post-pass so page.analysis is populated; band columns from the comparison). ---
     if "sheets" in tokens:
-        _write_sheets_sink(
-            run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub
-        )
+        _write_sheets_sink(run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub)
 
     # --- Render the final result on stdout (D-06). ---
     if output_json:
@@ -1287,6 +1304,16 @@ def crawl(
                 "tokens like 'admin'/'remove'/'archive'/'disable'). Narrow --deny "
                 "or seed a non-denied path if this crawl was intentional."
             )
+        # The seed is now always traversed for discovery even when it doesn't match
+        # --include, so a 0-measured result with includes set most likely means the
+        # include globs matched nothing reachable from the seed (over-narrowed).
+        if cfg.includes:
+            err_console.print(
+                "[yellow]hint:[/yellow] --include globs may have matched nothing "
+                "reachable from the seed (the seed is traversed for discovery but "
+                "only measured when it matches). Broaden --include or seed closer "
+                "to the pages you want measured."
+            )
         raise typer.Exit(code=int(ExitCode.MEASUREMENT_ERROR))
 
     # --- D-02: AI analysis post-pass (only when --ai; runs AFTER measurement and
@@ -1359,9 +1386,7 @@ def crawl(
 
     # --- OUT-02 / D-10: route to Google Sheets when 'sheets' selected. ---
     if "sheets" in tokens:
-        _write_sheets_sink(
-            run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub
-        )
+        _write_sheets_sink(run_record, sheets_id=sheets_id, band_results=band_results, scrub=scrub)
 
     # --- Render the multi-page result on stdout (D-06). ---
     if output_json:
