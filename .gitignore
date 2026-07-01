@@ -42,6 +42,12 @@ output/
 *.sa.json
 *service-account*.json
 
+# OS cruft — never tracked
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
 # GSD planning state — per-machine AI-orchestration state, never shared via git
 .planning/
 
